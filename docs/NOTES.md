@@ -43,10 +43,14 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
 - Content-addressed storage engine: a first slice exists
   (`Dezhan.Storage.Cas`): fixed-size chunking, SHA-256 content addressing,
   deduplication, Merkle-style manifest, integrity verification, corruption
-  detection. Still to do: content-defined chunking, multi-level manifests for
-  large objects (a single object is currently capped near 1 MB), encryption at
-  source, compression, a background scrubber loop, and garbage collection of
-  unreferenced chunks.
+  detection, and encryption at source (ChaCha20, `Dezhan.Trusted_Core.Cipher`).
+  Still to do: content-defined chunking, multi-level manifests for large objects
+  (a single object is currently capped near 1 MB), compression, a background
+  scrubber loop, and garbage collection of unreferenced chunks.
+- Key management is not implemented: where the vault key comes from, rotation,
+  per-object keys, and key wrapping are future work. The store takes a key from
+  the caller; tests use a fixed key and a zero nonce with a per-chunk counter
+  (a per-object random nonce is the intended hardening).
 - S3-compatible vault API: PUT/GET/HEAD/LIST, multipart, AWS SigV4, Object Lock.
 - General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays

@@ -5,7 +5,14 @@ with Dezhan.Trusted_Core.Hashing; use Dezhan.Trusted_Core.Hashing;
 
 package body Dezhan.Storage.Cas with SPARK_Mode => Off is
 
-   Hex_Digits : constant String := "0123456789abcdef";
+   Hex_Digits : constant String   := "0123456789abcdef";
+   Zero_Nonce : constant Nonce_96 := (others => 0);
+   Zero_Key   : constant Key_256  := (others => 0);
+
+   --  ChaCha20 counter base for chunk C: 4096-byte chunks are 64 keystream
+   --  blocks, so each chunk gets a disjoint keystream range.
+   function Counter_For (C : Natural) return Unsigned_32 is
+     (Unsigned_32 (C) * 64);
 
    function To_Hex (D : Digest) return Object_Id is
       R : Object_Id := (others => '0');
@@ -92,7 +99,10 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       return V;
    end Get_U64;
 
-   function Put (Root : String; Data : Stream_Element_Array) return Object_Id is
+   function Put
+     (Root : String; Key : Key_256; Data : Stream_Element_Array)
+      return Object_Id
+   is
       Len      : constant Natural := Natural (Data'Length);
       N_Chunks : constant Natural := (Len + Chunk_Size - 1) / Chunk_Size;
    begin
@@ -116,17 +126,22 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                   Last := Data'Last;
                end if;
                declare
-                  Bytes : constant Byte_Array := To_Bytes (Data (First .. Last));
-                  CD    : constant Digest     := SHA256 (Bytes);
-                  Hex   : constant Object_Id  := To_Hex (CD);
-                  Path  : constant String     := Object_Path (Root, Hex);
+                  Bytes : Byte_Array := To_Bytes (Data (First .. Last));
                begin
-                  if not Exists (Path) then
-                     Write_File (Path, Data (First .. Last));
-                  end if;
-                  for I in 0 .. 31 loop
-                     Manifest (8 + C * 32 + I) := CD (I);
-                  end loop;
+                  --  Encrypt at source, then address and store the cipher text.
+                  XCrypt (Key, Zero_Nonce, Counter_For (C), Bytes);
+                  declare
+                     CD   : constant Digest    := SHA256 (Bytes);
+                     Hex  : constant Object_Id := To_Hex (CD);
+                     Path : constant String    := Object_Path (Root, Hex);
+                  begin
+                     if not Exists (Path) then
+                        Write_File (Path, To_Stream (Bytes));
+                     end if;
+                     for I in 0 .. 31 loop
+                        Manifest (8 + C * 32 + I) := CD (I);
+                     end loop;
+                  end;
                end;
             end;
          end loop;
@@ -141,11 +156,13 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       end;
    end Put;
 
-   --  Shared reader used by Get and Verify. If Reassemble, returns the object
-   --  bytes; otherwise returns an empty array (just verifies). Raises
+   --  Shared reader for Get and Verify. Verifies the manifest and every
+   --  cipher-text chunk against its digest. If Reassemble, decrypts with Key and
+   --  returns the plaintext; otherwise returns an empty array. Raises
    --  Corruption_Detected on any mismatch.
-   function Load (Root : String; Id : Object_Id; Reassemble : Boolean)
-                  return Stream_Element_Array
+   function Load
+     (Root : String; Key : Key_256; Id : Object_Id; Reassemble : Boolean)
+      return Stream_Element_Array
    is
       Manifest_Bytes : constant Byte_Array :=
         To_Bytes (Read_File (Manifest_Path (Root, Id)));
@@ -155,8 +172,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       end if;
 
       declare
-         Len      : constant Natural :=
-           Natural (Get_U64 (Manifest_Bytes, 0));
+         Len      : constant Natural := Natural (Get_U64 (Manifest_Bytes, 0));
          N_Chunks : constant Natural := (Len + Chunk_Size - 1) / Chunk_Size;
          Result   : Stream_Element_Array (1 .. Stream_Element_Offset (Len));
          Pos      : Stream_Element_Offset := 1;
@@ -170,16 +186,20 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                end loop;
                declare
                   Hex   : constant Object_Id := To_Hex (CD);
-                  Chunk : constant Stream_Element_Array :=
-                    Read_File (Object_Path (Root, Hex));
+                  Bytes : Byte_Array :=
+                    To_Bytes (Read_File (Object_Path (Root, Hex)));
                begin
-                  if SHA256 (To_Bytes (Chunk)) /= CD then
-                     raise Corruption_Detected;
+                  if SHA256 (Bytes) /= CD then
+                     raise Corruption_Detected;  --  cipher-text integrity
                   end if;
                   if Reassemble then
-                     Result (Pos .. Pos + Chunk'Length - 1) := Chunk;
+                     XCrypt (Key, Zero_Nonce, Counter_For (C), Bytes);  --  decrypt
+                     for I in Bytes'Range loop
+                        Result (Pos + Stream_Element_Offset (I)) :=
+                          Stream_Element (Bytes (I));
+                     end loop;
                   end if;
-                  Pos := Pos + Chunk'Length;
+                  Pos := Pos + Stream_Element_Offset (Bytes'Length);
                end;
             end;
          end loop;
@@ -192,14 +212,16 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       end;
    end Load;
 
-   function Get (Root : String; Id : Object_Id) return Stream_Element_Array is
-     (Load (Root, Id, Reassemble => True));
+   function Get
+     (Root : String; Key : Key_256; Id : Object_Id)
+      return Stream_Element_Array is
+     (Load (Root, Key, Id, Reassemble => True));
 
    function Verify (Root : String; Id : Object_Id) return Boolean is
    begin
       declare
          Ignored : constant Stream_Element_Array :=
-           Load (Root, Id, Reassemble => False);
+           Load (Root, Zero_Key, Id, Reassemble => False);
          pragma Unreferenced (Ignored);
       begin
          return True;

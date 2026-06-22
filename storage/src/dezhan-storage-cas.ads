@@ -11,6 +11,7 @@
 --  Dezhan.Trusted_Core.Hashing.SHA256. Large-object multi-level manifests and
 --  content-defined chunking are future work (see docs/NOTES.md).
 with Ada.Streams; use Ada.Streams;
+with Dezhan.Trusted_Core.Cipher; use Dezhan.Trusted_Core.Cipher;
 package Dezhan.Storage.Cas with SPARK_Mode => Off is
 
    Chunk_Size : constant := 4096;
@@ -27,14 +28,22 @@ package Dezhan.Storage.Cas with SPARK_Mode => Off is
    --  Create the on-disk layout under Root (objects/ and manifests/).
    procedure Initialize (Root : String);
 
-   --  Store Data; returns its object id. Idempotent: the same bytes give the
-   --  same id and reuse existing chunks.
-   function Put (Root : String; Data : Stream_Element_Array) return Object_Id;
+   --  Store Data encrypted at source under Key; returns its object id. Each
+   --  chunk is encrypted with ChaCha20 before being hashed and written, so the
+   --  bytes on disk are ciphertext. Idempotent for a given Key: the same bytes
+   --  and key give the same id and reuse existing chunks.
+   function Put
+     (Root : String; Key : Key_256; Data : Stream_Element_Array)
+      return Object_Id;
 
-   --  Reassemble the object for Id, verifying every chunk and the manifest.
-   function Get (Root : String; Id : Object_Id) return Stream_Element_Array;
+   --  Reassemble and decrypt the object for Id, verifying the manifest and every
+   --  (cipher-text) chunk against its digest before decrypting.
+   function Get
+     (Root : String; Key : Key_256; Id : Object_Id)
+      return Stream_Element_Array;
 
-   --  Scrub: True iff the manifest and all chunks are present and intact.
+   --  Scrub: True iff the manifest and all chunks are present and intact. Checks
+   --  cipher-text integrity, so it needs no key.
    function Verify (Root : String; Id : Object_Id) return Boolean;
 
 end Dezhan.Storage.Cas;

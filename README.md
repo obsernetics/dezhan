@@ -26,7 +26,8 @@ This completes the SPARK-verified trusted core (232 checks, 0 unproved).
 
 Platform layer (regular Ada, in progress): a content-addressed storage engine
 (`Dezhan.Storage.Cas`) stores objects as SHA-256-addressed chunks with a
-Merkle-style manifest, deduplicates, and detects corruption on read.
+Merkle-style manifest, deduplicates, encrypts at source (ChaCha20, RFC 8439),
+and detects corruption on read.
 
 See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
 [`docs/NOTES.md`](docs/NOTES.md) for the roadmap and current limitations.

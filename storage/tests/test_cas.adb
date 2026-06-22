@@ -4,6 +4,7 @@ with Ada.Command_Line;      use Ada.Command_Line;
 with Ada.Streams;           use Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Directories;       use Ada.Directories;
+with Dezhan.Trusted_Core.Cipher; use Dezhan.Trusted_Core.Cipher;
 with Dezhan.Storage.Cas;    use Dezhan.Storage.Cas;
 
 --  Exercises the content-addressed store: round-trip, deduplication (stable
@@ -77,6 +78,11 @@ procedure Test_Cas is
       return False;
    end Corrupt_A_Chunk;
 
+   Key : constant Key_256 :=
+     (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+      17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32);
+   Wrong_Key : constant Key_256 := (others => 99);
+
    Data : Stream_Element_Array (1 .. 10_000);   --  spans three 4096-byte chunks
 
 begin
@@ -90,12 +96,14 @@ begin
    end loop;
 
    declare
-      Id   : constant Object_Id := Put (Root, Data);
-      Back : constant Stream_Element_Array := Get (Root, Id);
+      Id    : constant Object_Id := Put (Root, Key, Data);
+      Back  : constant Stream_Element_Array := Get (Root, Key, Id);
+      Wrong : constant Stream_Element_Array := Get (Root, Wrong_Key, Id);
    begin
-      Check (Equal (Back, Data), "round-trip returns the original bytes");
+      Check (Equal (Back, Data), "round-trip with the right key returns the original");
+      Check (not Equal (Wrong, Data), "wrong key does not recover the data (encrypted at rest)");
       Check (Verify (Root, Id), "verify reports the object intact");
-      Check (Put (Root, Data) = Id, "storing identical bytes yields the same id");
+      Check (Put (Root, Key, Data) = Id, "same bytes and key yield the same id");
 
       Check (Corrupt_A_Chunk, "a stored chunk was found to corrupt");
       Check (not Verify (Root, Id), "verify detects the corrupted chunk");
@@ -104,8 +112,8 @@ begin
    --  Empty object round-trips.
    declare
       Empty : constant Stream_Element_Array (1 .. 0) := (others => 0);
-      Id    : constant Object_Id := Put (Root, Empty);
-      Back  : constant Stream_Element_Array := Get (Root, Id);
+      Id    : constant Object_Id := Put (Root, Key, Empty);
+      Back  : constant Stream_Element_Array := Get (Root, Key, Id);
    begin
       Check (Back'Length = 0, "empty object round-trips");
    end;
