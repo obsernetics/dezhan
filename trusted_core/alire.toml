@@ -1,0 +1,11 @@
+name = "dezhan_trusted_core"
+description = "dezhan SPARK-verified trusted core (retention state machine)"
+version = "0.1.0"
+licenses = "Apache-2.0"
+authors = ["dezhan"]
+maintainers = ["dev@dezhan.local"]
+maintainers-logins = ["dezhan"]
+project-files = ["dezhan_trusted_core.gpr"]
+
+[build-switches."*"]
+ada_version = "Ada2022"

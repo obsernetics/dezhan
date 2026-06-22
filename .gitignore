@@ -1,0 +1,16 @@
+# Ada / Alire build artifacts
+obj/
+lib/
+alire/
+config/
+*.ali
+*.o
+gnatprove/
+
+# Local dev tooling and build VM (not part of the published software)
+vm/
+Makefile
+CLAUDE.md
+*.qcow2
+*.img
+seed.iso

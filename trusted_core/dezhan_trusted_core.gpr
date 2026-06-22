@@ -1,0 +1,21 @@
+library project Dezhan_Trusted_Core is
+
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj";
+   for Library_Name use "dezhan_trusted_core";
+   for Library_Dir use "lib";
+   for Library_Kind use "static";
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        ("-gnat2022",   --  Ada 2022
+         "-gnatwa",     --  all warnings
+         "-gnata",      --  enable assertions / contracts at runtime
+         "-g");
+   end Compiler;
+
+   package Prove is
+      for Proof_Switches ("Ada") use ("--level=2", "--report=all");
+   end Prove;
+
+end Dezhan_Trusted_Core;
