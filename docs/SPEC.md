@@ -383,6 +383,23 @@ Version 1.0 must include only:
 
 ---
 
+## General-Purpose Storage (post-MVP goal)
+
+dezhan is primarily an immutable vault, and provable immutability remains the
+headline. As a secondary, post-MVP goal it should also be usable as a
+general-purpose S3 object store, by supporting two per-bucket modes:
+
+* Immutable: Object Lock on; retention enforced by the SPARK trusted core.
+* Standard: mutable objects (overwrite, delete, versioning); no retention lock.
+
+Both modes share the same S3 API and content-addressed storage engine, and both
+receive audit-chain logging and integrity scrubbing. Only immutable buckets are
+governed by the retention state machine. This does not change the priority of
+integrity over throughput: dezhan is not intended to match general-purpose stores
+on raw throughput.
+
+---
+
 ## Non-Functional Requirements
 
 ### Reliability

@@ -41,6 +41,10 @@ Platform, later phases:
 - Content-addressed storage engine: chunking, deduplication, compression,
   encryption at source, Merkle manifests, background scrubbing.
 - S3-compatible vault API: PUT/GET/HEAD/LIST, multipart, AWS SigV4, Object Lock.
+- General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
+  dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays
+  the headline. Both modes share the S3 API, storage engine, audit chain, and
+  scrubbing; only Immutable buckets use the retention state machine.
 - Local auth realm, RBAC, quorum approvals, API tokens, service accounts.
 - CLI and minimal web UI.
 - Observability: Prometheus metrics, structured logs, health endpoints.
