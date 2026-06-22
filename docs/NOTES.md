@@ -38,10 +38,15 @@ Trusted core (all four units implemented and verified): the remaining trusted-co
 work is the deferred Audit Chain extras: signed checkpoints (Ed25519 plus key
 management) and the standalone independent verifier tool.
 
-Platform, later phases:
+Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
 
-- Content-addressed storage engine: chunking, deduplication, compression,
-  encryption at source, Merkle manifests, background scrubbing.
+- Content-addressed storage engine: a first slice exists
+  (`Dezhan.Storage.Cas`): fixed-size chunking, SHA-256 content addressing,
+  deduplication, Merkle-style manifest, integrity verification, corruption
+  detection. Still to do: content-defined chunking, multi-level manifests for
+  large objects (a single object is currently capped near 1 MB), encryption at
+  source, compression, a background scrubber loop, and garbage collection of
+  unreferenced chunks.
 - S3-compatible vault API: PUT/GET/HEAD/LIST, multipart, AWS SigV4, Object Lock.
 - General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays

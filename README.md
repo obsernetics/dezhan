@@ -24,6 +24,10 @@ with 0 unproved checks:
 
 This completes the SPARK-verified trusted core (232 checks, 0 unproved).
 
+Platform layer (regular Ada, in progress): a content-addressed storage engine
+(`Dezhan.Storage.Cas`) stores objects as SHA-256-addressed chunks with a
+Merkle-style manifest, deduplicates, and detects corruption on read.
+
 See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
 [`docs/NOTES.md`](docs/NOTES.md) for the roadmap and current limitations.
 
@@ -47,6 +51,7 @@ docs/SPEC.md    specification (source of truth)
 docs/NOTES.md   roadmap and current limitations
 docs/design/    per-unit design documents
 trusted_core/   SPARK-verified core (src/) and tests (tests/)
+storage/        content-addressed storage engine (Ada)
 ```
 
 Licensed under Apache-2.0.
