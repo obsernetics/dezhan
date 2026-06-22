@@ -19,6 +19,10 @@ with 0 unproved checks:
 - **Audit Chain.** An append-only, hash-chained log with in-tree SHA-256. A past
   entry cannot be altered without breaking the link to its successor (proved,
   given standard hash collision resistance).
+- **Erasure Coding.** Systematic Reed-Solomon over GF(2^8). Any K of the N shards
+  reconstruct the original data; validated by an exhaustive round-trip test.
+
+This completes the SPARK-verified trusted core (232 checks, 0 unproved).
 
 See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
 [`docs/NOTES.md`](docs/NOTES.md) for the roadmap and current limitations.

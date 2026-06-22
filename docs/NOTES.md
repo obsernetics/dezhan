@@ -25,16 +25,18 @@ finished, verified work. Keep it current as the trusted core grows.
   today; a sane default and operator policy are not yet defined.
 - **`alire.toml` is metadata only.** Builds and proofs are driven by `gprbuild`
   and `gnatprove` directly; the crate manifest may be incomplete.
+- **Reed-Solomon reconstruction correctness is test-validated, not proved.**
+  gnatprove proves the erasure unit free of run-time errors and terminating; the
+  guarantee that any K of N shards reconstruct the original (the MDS property) is
+  validated by an exhaustive round-trip test, the same model used for SHA-256
+  against NIST vectors. Bounds are fixed (Max_Data 8, Max_Parity 8, shard length
+  1024).
 
 ## Future improvements (per docs/SPEC.md, deferred by scope)
 
-Trusted core, remaining units:
-
-- **Audit Chain.** Hash-chained append-only log with in-tree SPARK SHA-256 and a
-  tamper-evidence proof. Signed checkpoints (Ed25519 plus key management) and the
-  standalone independent verifier tool are a following cycle.
-- **Erasure Coding.** Reed-Solomon redundancy with configurable layout,
-  reconstruction, and corruption detection.
+Trusted core (all four units implemented and verified): the remaining trusted-core
+work is the deferred Audit Chain extras: signed checkpoints (Ed25519 plus key
+management) and the standalone independent verifier tool.
 
 Platform, later phases:
 
