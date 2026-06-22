@@ -16,6 +16,9 @@ with 0 unproved checks:
 - **Clock Integrity Guard.** Trusted time advances only by a monotonic clock and
   is provably independent of the untrusted system clock, so moving the system
   clock cannot expire a lock.
+- **Audit Chain.** An append-only, hash-chained log with in-tree SHA-256. A past
+  entry cannot be altered without breaking the link to its successor (proved,
+  given standard hash collision resistance).
 
 See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
 [`docs/NOTES.md`](docs/NOTES.md) for the roadmap and current limitations.
