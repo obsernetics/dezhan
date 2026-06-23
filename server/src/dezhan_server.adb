@@ -150,8 +150,8 @@ procedure Dezhan_Server is
          return "";
       end if;
       declare
-         From  : Natural := Idx + Key_Str'Length;
-         Stop  : Natural := Index (Head (From .. Head'Last), CRLF);
+         From  : constant Natural := Idx + Key_Str'Length;
+         Stop  : constant Natural := Index (Head (From .. Head'Last), CRLF);
          Value : constant String :=
            (if Stop = 0 then Head (From .. Head'Last) else Head (From .. Stop - 1));
       begin
@@ -261,6 +261,11 @@ procedure Dezhan_Server is
          SDate   : constant String := Part (Cred, '/', 2);
          Region  : constant String := Part (Cred, '/', 3);
          Service : constant String := Part (Cred, '/', 4);
+         QPos    : constant Natural := Index (Path, "?");
+         Path0   : constant String :=
+           (if QPos = 0 then Path else Path (Path'First .. QPos - 1));
+         Query   : constant String :=
+           (if QPos = 0 then "" else Path (QPos + 1 .. Path'Last));
          CH      : Unbounded_String;
          N       : Natural := 1;
       begin
@@ -277,7 +282,8 @@ procedure Dezhan_Server is
             end;
          end loop;
          if Dezhan.Sigv4.Signature_For
-              (Secret_Key, Method, Path, "", To_String (CH), SH, Payload_Hash,
+              (Secret_Key, Method, Path0, Dezhan.Sigv4.Canonical_Query (Query),
+               To_String (CH), SH, Payload_Hash,
                Header (Head, "x-amz-date"), SDate, Region, Service) = Sig
          then
             return Valid;

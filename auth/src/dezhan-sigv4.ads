@@ -14,6 +14,11 @@ package Dezhan.Sigv4 with SPARK_Mode => Off is
    --  Lowercase hex of SHA-256 over Data (Data must fit the hash input bound).
    function Hex_SHA256 (Data : String) return String;
 
+   --  SigV4 canonical query string: each parameter name and value URI-encoded
+   --  (RFC 3986 unreserved kept, everything else percent-encoded), parameters
+   --  sorted by encoded name. Raw_Query is the part after '?' ("" if none).
+   function Canonical_Query (Raw_Query : String) return String;
+
    --  Compute the expected SigV4 signature for a request. Builds the canonical
    --  request and string-to-sign per AWS, then signs. The server compares the
    --  result to the client's Signature; equality authenticates the request.

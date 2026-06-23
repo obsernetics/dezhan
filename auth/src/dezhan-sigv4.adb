@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;       use Ada.Strings.Unbounded;
 with Dezhan.Trusted_Core.Hashing; use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Trusted_Core.HMAC;    use Dezhan.Trusted_Core.HMAC;
 
@@ -39,6 +40,90 @@ package body Dezhan.Sigv4 with SPARK_Mode => Off is
    begin
       return Hex (SHA256 (To_Bytes (Data)));
    end Hex_SHA256;
+
+   function Uri_Encode (S : String) return String is
+      Out_S : String (1 .. 3 * S'Length);
+      Last  : Natural := 0;
+   begin
+      for C of S loop
+         if C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~' then
+            Last := Last + 1;
+            Out_S (Last) := C;
+         else
+            Out_S (Last + 1) := '%';
+            Out_S (Last + 2) := Hex_Digits (Character'Pos (C) / 16 + 1);
+            Out_S (Last + 3) := Hex_Digits (Character'Pos (C) mod 16 + 1);
+            Last := Last + 3;
+         end if;
+      end loop;
+      return Out_S (1 .. Last);
+   end Uri_Encode;
+
+   function Canonical_Query (Raw_Query : String) return String is
+      Max   : constant := 64;
+      Parts : array (1 .. Max) of Unbounded_String;
+      N     : Natural := 0;
+
+      procedure Add (Token : String) is
+         Eq : Natural := 0;
+      begin
+         if Token'Length = 0 or else N = Max then
+            return;
+         end if;
+         for I in Token'Range loop
+            if Token (I) = '=' then
+               Eq := I;
+               exit;
+            end if;
+         end loop;
+         N := N + 1;
+         if Eq = 0 then
+            Parts (N) := To_Unbounded_String (Uri_Encode (Token) & "=");
+         else
+            Parts (N) := To_Unbounded_String
+              (Uri_Encode (Token (Token'First .. Eq - 1)) & "="
+               & Uri_Encode (Token (Eq + 1 .. Token'Last)));
+         end if;
+      end Add;
+
+      Start : Natural := Raw_Query'First;
+   begin
+      for I in Raw_Query'Range loop
+         if Raw_Query (I) = '&' then
+            Add (Raw_Query (Start .. I - 1));
+            Start := I + 1;
+         end if;
+      end loop;
+      if Raw_Query'Length > 0 then
+         Add (Raw_Query (Start .. Raw_Query'Last));
+      end if;
+
+      --  Selection sort by encoded "name=value".
+      for I in 1 .. N loop
+         for J in I + 1 .. N loop
+            if Parts (J) < Parts (I) then
+               declare
+                  T : constant Unbounded_String := Parts (I);
+               begin
+                  Parts (I) := Parts (J);
+                  Parts (J) := T;
+               end;
+            end if;
+         end loop;
+      end loop;
+
+      declare
+         R : Unbounded_String;
+      begin
+         for I in 1 .. N loop
+            if I > 1 then
+               Append (R, "&");
+            end if;
+            Append (R, Parts (I));
+         end loop;
+         return To_String (R);
+      end;
+   end Canonical_Query;
 
    function Signature_For
      (Secret, Method, Canonical_URI, Canonical_Query,

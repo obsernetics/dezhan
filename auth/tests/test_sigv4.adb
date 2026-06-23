@@ -67,6 +67,16 @@ begin
       Check (S1 /= S3, "changing the method changes the signature");
    end;
 
+   --  Canonical query: sorted by name, names/values URI-encoded.
+   Check (Canonical_Query ("uploads") = "uploads=",
+          "valueless query param canonicalizes to name=");
+   Check (Canonical_Query ("uploadId=abc-1") = "uploadId=abc-1",
+          "simple query param round-trips");
+   Check (Canonical_Query ("b=2&a=1") = "a=1&b=2",
+          "query params are sorted by name");
+   Check (Canonical_Query ("k=a b") = "k=a%20b",
+          "query values are URI-encoded");
+
    --  Determinism / self-consistency.
    Check (Signature (Secret, "20150830", "us-east-1", "iam", String_To_Sign) = Got,
           "signing is deterministic");
