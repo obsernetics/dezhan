@@ -38,45 +38,54 @@ procedure Test_Cas is
       return True;
    end Equal;
 
-   --  Overwrite the first byte of the first stored chunk file, simulating
-   --  silent media corruption. Returns True if a chunk was corrupted.
-   function Corrupt_A_Chunk return Boolean is
-      Sub : Search_Type;
-      Dir : Directory_Entry_Type;
+   --  Delete up to N shard files from the first chunk directory found (chunks
+   --  are stored as objects/<2hex>/<64hex>/{1..6,idx}). Returns how many were
+   --  removed. Two calls remove from the same chunk, so 2 then 2 more drops it
+   --  below the K=4 recovery threshold.
+   function Delete_N_Shards (N : Positive) return Natural is
+      Deleted : Natural := 0;
+      L1 : Search_Type;
+      E1 : Directory_Entry_Type;
    begin
-      Start_Search (Sub, Compose (Root, "objects"), "",
+      Start_Search (L1, Compose (Root, "objects"), "",
                     (Directory => True, others => False));
-      while More_Entries (Sub) loop
-         Get_Next_Entry (Sub, Dir);
-         if Simple_Name (Dir) /= "." and then Simple_Name (Dir) /= ".." then
+      while More_Entries (L1) loop
+         Get_Next_Entry (L1, E1);
+         if Simple_Name (E1) /= "." and then Simple_Name (E1) /= ".." then
             declare
-               Files : Search_Type;
-               F_Ent : Directory_Entry_Type;
+               L2 : Search_Type;
+               E2 : Directory_Entry_Type;
             begin
-               Start_Search (Files, Full_Name (Dir), "",
-                             (Ordinary_File => True, others => False));
-               if More_Entries (Files) then
-                  Get_Next_Entry (Files, F_Ent);
-                  declare
-                     F : Ada.Streams.Stream_IO.File_Type;
-                     B : constant Stream_Element_Array (1 .. 1) := (1 => 255);
-                  begin
-                     Ada.Streams.Stream_IO.Open
-                       (F, Ada.Streams.Stream_IO.Out_File, Full_Name (F_Ent));
-                     Ada.Streams.Stream_IO.Write (F, B);
-                     Ada.Streams.Stream_IO.Close (F);
-                  end;
-                  End_Search (Files);
-                  End_Search (Sub);
-                  return True;
-               end if;
-               End_Search (Files);
+               Start_Search (L2, Full_Name (E1), "",
+                             (Directory => True, others => False));
+               while More_Entries (L2) loop
+                  Get_Next_Entry (L2, E2);
+                  if Simple_Name (E2) /= "." and then Simple_Name (E2) /= ".." then
+                     for S in 1 .. 6 loop
+                        exit when Deleted >= N;
+                        declare
+                           F : constant String := Compose
+                             (Full_Name (E2),
+                              (1 => Character'Val (Character'Pos ('0') + S)));
+                        begin
+                           if Exists (F) then
+                              Delete_File (F);
+                              Deleted := Deleted + 1;
+                           end if;
+                        end;
+                     end loop;
+                     End_Search (L2);
+                     End_Search (L1);
+                     return Deleted;
+                  end if;
+               end loop;
+               End_Search (L2);
             end;
          end if;
       end loop;
-      End_Search (Sub);
-      return False;
-   end Corrupt_A_Chunk;
+      End_Search (L1);
+      return Deleted;
+   end Delete_N_Shards;
 
    Key : constant Key_256 :=
      (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
@@ -105,8 +114,17 @@ begin
       Check (Verify (Root, Id), "verify reports the object intact");
       Check (Put (Root, Key, Data) = Id, "same bytes and key yield the same id");
 
-      Check (Corrupt_A_Chunk, "a stored chunk was found to corrupt");
-      Check (not Verify (Root, Id), "verify detects the corrupted chunk");
+      --  Erasure coding: losing up to M=2 shards of a chunk is recoverable.
+      Check (Delete_N_Shards (2) = 2, "removed 2 of 6 shards from a chunk");
+      Check (Verify (Root, Id),
+             "erasure recovers: object intact after losing 2 shards");
+      Check (Equal (Get (Root, Key, Id), Data),
+             "object reassembles from parity after losing 2 shards");
+
+      --  Losing more than M shards of a chunk is unrecoverable and detected.
+      Check (Delete_N_Shards (2) = 2, "removed 2 more shards (4 of 6 gone)");
+      Check (not Verify (Root, Id),
+             "verify detects unrecoverable loss (> M shards)");
    end;
 
    --  Empty object round-trips.

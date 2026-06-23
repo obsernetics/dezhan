@@ -35,7 +35,10 @@ finished, verified work. Keep it current as the trusted core grows.
   guarantee that any K of N shards reconstruct the original (the MDS property) is
   validated by an exhaustive round-trip test, the same model used for SHA-256
   against NIST vectors. Bounds are fixed (Max_Data 8, Max_Parity 8, shard length
-  1024).
+  1024). The storage engine now uses it: each chunk is stored as 4 data + 2
+  parity shards (each with its own digest), so up to 2 lost/corrupt shards per
+  chunk are reconstructed on read; beyond that, loss is detected. Tuning the
+  K/M layout and protecting the manifest itself with parity are follow-ups.
 
 ## Future improvements (per docs/SPEC.md, deferred by scope)
 

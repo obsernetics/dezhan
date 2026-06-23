@@ -28,7 +28,9 @@ Platform layer (regular Ada), an end-to-end POC on top of the verified core:
 
 - **Storage** (`Dezhan.Storage.Cas`): content-addressed chunks (SHA-256), a
   Merkle-style manifest, deduplication, encryption at source (ChaCha20), and
-  corruption detection on read.
+  Reed-Solomon erasure coding (each chunk is stored as 4 data + 2 parity shards),
+  so up to two lost or corrupt shards per chunk are reconstructed on read and
+  unrecoverable loss is detected.
 - **Vault** (`Dezhan.Vault`): ties storage + retention + clock + audit into WORM
   behavior. A compliance-locked object cannot be deleted before expiry (even with
   a bypass), a manipulated clock cannot expire it, and every action is recorded

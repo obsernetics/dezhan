@@ -53,43 +53,57 @@ procedure Test_Vault is
       return True;
    end Equal;
 
-   --  Flip a byte in every stored chunk file, simulating bit rot. Corrupts all
-   --  chunks (orphaned and live) so any live object is guaranteed affected.
+   --  Corrupt every shard/idx file of every chunk (chunks are stored as
+   --  objects/<2hex>/<64hex>/{1..6,idx}), so all chunks become unrecoverable and
+   --  any live object is guaranteed affected.
    function Corrupt_All_Chunks return Natural is
       use Ada.Directories;
-      Sub     : Search_Type;
-      Dir     : Directory_Entry_Type;
+      L1      : Search_Type;
+      E1      : Directory_Entry_Type;
       Damaged : Natural := 0;
    begin
-      Start_Search (Sub, Compose (Root, "objects"), "",
+      Start_Search (L1, Compose (Root, "objects"), "",
                     (Directory => True, others => False));
-      while More_Entries (Sub) loop
-         Get_Next_Entry (Sub, Dir);
-         if Simple_Name (Dir) /= "." and then Simple_Name (Dir) /= ".." then
+      while More_Entries (L1) loop
+         Get_Next_Entry (L1, E1);
+         if Simple_Name (E1) /= "." and then Simple_Name (E1) /= ".." then
             declare
-               Files : Search_Type;
-               FE    : Directory_Entry_Type;
+               L2 : Search_Type;
+               E2 : Directory_Entry_Type;
             begin
-               Start_Search (Files, Full_Name (Dir), "",
-                             (Ordinary_File => True, others => False));
-               while More_Entries (Files) loop
-                  Get_Next_Entry (Files, FE);
-                  declare
-                     F : Ada.Streams.Stream_IO.File_Type;
-                     B : constant Stream_Element_Array (1 .. 1) := (1 => 255);
-                  begin
-                     Ada.Streams.Stream_IO.Open
-                       (F, Ada.Streams.Stream_IO.Out_File, Full_Name (FE));
-                     Ada.Streams.Stream_IO.Write (F, B);
-                     Ada.Streams.Stream_IO.Close (F);
-                     Damaged := Damaged + 1;
-                  end;
+               Start_Search (L2, Full_Name (E1), "",
+                             (Directory => True, others => False));
+               while More_Entries (L2) loop
+                  Get_Next_Entry (L2, E2);
+                  if Simple_Name (E2) /= "." and then Simple_Name (E2) /= ".." then
+                     declare
+                        Files : Search_Type;
+                        FE    : Directory_Entry_Type;
+                     begin
+                        Start_Search (Files, Full_Name (E2), "",
+                                      (Ordinary_File => True, others => False));
+                        while More_Entries (Files) loop
+                           Get_Next_Entry (Files, FE);
+                           declare
+                              F : Ada.Streams.Stream_IO.File_Type;
+                              B : constant Stream_Element_Array (1 .. 1) := (1 => 255);
+                           begin
+                              Ada.Streams.Stream_IO.Open
+                                (F, Ada.Streams.Stream_IO.Out_File, Full_Name (FE));
+                              Ada.Streams.Stream_IO.Write (F, B);
+                              Ada.Streams.Stream_IO.Close (F);
+                              Damaged := Damaged + 1;
+                           end;
+                        end loop;
+                        End_Search (Files);
+                     end;
+                  end if;
                end loop;
-               End_Search (Files);
+               End_Search (L2);
             end;
          end if;
       end loop;
-      End_Search (Sub);
+      End_Search (L1);
       return Damaged;
    end Corrupt_All_Chunks;
 
