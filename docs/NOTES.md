@@ -102,3 +102,8 @@ whose exact canonicalization should be confirmed end to end.
 - Hardware-backed time anchor (TPM or secure RTC) behind the existing pluggable
   seam in the Clock Guard.
 - Durable, crash-safe persistence for trusted-core state.
+- CI/CD: `.github/workflows/ada.yml` builds with GPRbuild and runs the tests on
+  push/PR; `.github/workflows/release.yml` builds binaries on a `v*` tag and
+  generates SLSA3 provenance via the SLSA GitHub generator. These run on GitHub
+  Actions and have not been executed in this offline environment, so the first
+  run may need a minor tweak (toolchain action version or runner specifics).

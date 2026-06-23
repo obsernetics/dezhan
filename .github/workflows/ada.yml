@@ -1,0 +1,60 @@
+name: Ada
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build Ada project with GPRbuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v4
+
+      - name: Install GNAT and GPRbuild toolchain
+        run: alr -n toolchain --select gnat_native gprbuild
+
+      - name: Build all projects and run tests
+        run: |
+          set -euxo pipefail
+          # Put the Alire-managed GNAT and GPRbuild on PATH.
+          for d in "$HOME"/.local/share/alire/toolchains/*/bin; do
+            export PATH="$d:$PATH"
+          done
+          gnat --version | head -1
+          gprbuild --version | head -1
+
+          # Libraries and executables (-p creates object/library dirs).
+          gprbuild -p -P trusted_core/dezhan_trusted_core.gpr
+          gprbuild -p -P storage/dezhan_storage.gpr
+          gprbuild -p -P auth/dezhan_sigv4.gpr
+          gprbuild -p -P vault/dezhan_vault.gpr
+          gprbuild -p -P server/dezhan_server.gpr
+          gprbuild -p -P cli/dezhan_cli.gpr
+
+          # Test drivers.
+          gprbuild -p -P trusted_core/tests/tests.gpr
+          gprbuild -p -P storage/tests/storage_tests.gpr
+          gprbuild -p -P auth/tests/sigv4_tests.gpr
+          gprbuild -p -P vault/tests/vault_tests.gpr
+
+          for t in \
+            trusted_core/tests/obj/test_retention \
+            trusted_core/tests/obj/test_clock_guard \
+            trusted_core/tests/obj/test_hashing \
+            trusted_core/tests/obj/test_audit \
+            trusted_core/tests/obj/test_erasure \
+            trusted_core/tests/obj/test_cipher \
+            trusted_core/tests/obj/test_hmac \
+            storage/tests/obj/test_cas \
+            vault/tests/obj/test_vault \
+            auth/tests/obj/test_sigv4; do
+            echo "== $t =="
+            "./$t"
+          done

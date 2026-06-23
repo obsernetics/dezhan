@@ -65,6 +65,16 @@ gnatprove -P dezhan_trusted_core.gpr --level=2 --report=all  # prove the invaria
 ./tests/obj/test_retention && ./tests/obj/test_clock_guard   # run the tests
 ```
 
+## Continuous integration and releases
+
+- `.github/workflows/ada.yml` (**Ada / Build Ada project with GPRbuild**) builds
+  every project with GPRbuild on the Alire-managed GNAT toolchain and runs the
+  test drivers on each push and pull request.
+- `.github/workflows/release.yml` builds the static binaries on a `v*` tag and
+  generates **SLSA3 build provenance** for them via the official
+  `slsa-framework/slsa-github-generator` reusable workflow, attaching the signed
+  provenance to the release.
+
 ## Layout
 
 ```
