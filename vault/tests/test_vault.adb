@@ -254,6 +254,24 @@ begin
              "exported copy is an independent, readable vault");
    end;
 
+   --  Legal hold: an expiry-eligible object is held, so deletion is refused even
+   --  with bypass; the hold survives a reopen; after release it is deletable.
+   Put_Object (V, "hold-test", Bytes ("x"), Governance, Retain_For => 0);
+   Set_Legal_Hold (V, "hold-test");
+   Check (Has_Legal_Hold (V, "hold-test"), "legal hold placed");
+   Check (not Delete_Object (V, "hold-test", Bypass => True),
+          "held (expired) object cannot be deleted even with bypass");
+   declare
+      V4 : Vault_Type;
+   begin
+      Open (V4, Root, Key);
+      Check (Has_Legal_Hold (V4, "hold-test"), "legal hold survives reopen");
+   end;
+   Release_Legal_Hold (V, "hold-test");
+   Check (not Has_Legal_Hold (V, "hold-test"), "legal hold released");
+   Check (Delete_Object (V, "hold-test", Bypass => False),
+          "after release, the expired object is deletable");
+
    --  Background scrubbing: a clean sweep reports all objects intact; after a
    --  chunk is corrupted on disk, the scrub detects it.
    declare

@@ -122,6 +122,12 @@ package Dezhan.Vault with SPARK_Mode => Off is
    --  (a different media class), yielding a self-contained, openable vault.
    procedure Export (V : Vault_Type; Dest : String);
 
+   --  Legal hold: an indefinite hold that blocks deletion of an object
+   --  regardless of its retention mode or expiry, until released. Persisted.
+   procedure Set_Legal_Hold     (V : in out Vault_Type; Name : String);
+   procedure Release_Legal_Hold (V : in out Vault_Type; Name : String);
+   function  Has_Legal_Hold     (V : Vault_Type; Name : String) return Boolean;
+
    function Now    (V : Vault_Type) return Trusted_Time;
 
    --  True if sealed for any reason (operator seal or detected clock anomaly).

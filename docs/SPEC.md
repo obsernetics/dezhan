@@ -114,13 +114,15 @@ Responsible for:
 * Governance mode
 * Compliance mode
 * Retention expiration
-* Legal hold support (future)
+* Legal hold support
 
 Mandatory invariant:
 
 ```text
 Retention may be extended.
 Retention may never be shortened.
+A legal hold blocks deletion absolutely, even past expiry and even under
+a Governance-mode bypass, until the hold is released.
 ```
 
 ---

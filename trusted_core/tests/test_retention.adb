@@ -85,6 +85,22 @@ begin
              "governance: can delete at expiry");
    end;
 
+   --  Legal hold blocks deletion regardless of mode, expiry, or bypass
+   declare
+      L : constant Retention_Lock :=
+        Set_Hold (Create_Lock (Governance, 1000, 100));
+   begin
+      Check (L.Legal_Hold, "set hold marks the lock held");
+      Check (not Can_Delete (L, 2000, No_Auth),
+             "held object cannot be deleted after expiry");
+      Check (not Can_Delete (L, 2000, Bypass),
+             "held object cannot be bypass-deleted after expiry");
+      Check (Can_Delete (Release_Hold (L), 2000, No_Auth),
+             "after release, normal expiry rules apply (deletable past expiry)");
+      Check (not Can_Delete (Release_Hold (L), 999, No_Auth),
+             "after release, retention still applies before expiry");
+   end;
+
    New_Line;
    if Failures = 0 then
       Put_Line ("ALL TESTS PASSED");

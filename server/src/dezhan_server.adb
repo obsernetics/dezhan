@@ -18,6 +18,7 @@ pragma Ada_2022;
 --    POST   /admin/ingest-only?on=1|0   one-way ingest (block reads)
 --    POST   /admin/sync-window?open=1|0 open/close the sync window
 --    POST   /admin/export?dest=<path>   technology-break export
+--    POST   /admin/legal-hold?name=X&on=1|0  place/release a legal hold
 --    GET    /v                  list objects
 --    PUT    /v/<name>           store (headers X-Dezhan-Mode, X-Dezhan-Retain)
 --    GET    /v/<name>           retrieve
@@ -470,6 +471,24 @@ procedure Dezhan_Server is
             end if;
             Send_Text (Ch, "200 OK",
               "sync_window=" & (if Sync_Window_Open (V) then "open" else "closed"));
+
+         elsif Method = "POST" and then Path0 = "/admin/legal-hold" then
+            declare
+               Name : constant String := Q_Val (PQuery, "name=");
+            begin
+               if Name = "" then
+                  Send_Text (Ch, "400 Bad Request", "missing name=");
+               else
+                  if Q_Val (PQuery, "on=") = "1" then
+                     Set_Legal_Hold (V, Name);
+                  else
+                     Release_Legal_Hold (V, Name);
+                  end if;
+                  Send_Text (Ch, "200 OK",
+                    "legal_hold " & Name & "="
+                    & (if Has_Legal_Hold (V, Name) then "on" else "off"));
+               end if;
+            end;
 
          elsif Method = "POST" and then Path0 = "/admin/export" then
             declare

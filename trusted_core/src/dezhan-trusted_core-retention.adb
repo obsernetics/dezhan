@@ -8,8 +8,23 @@ package body Dezhan.Trusted_Core.Retention with SPARK_Mode is
    begin
       return (Mode         => Mode,
               Retain_Until => Retain_Until,
-              Created_At   => Now);
+              Created_At   => Now,
+              Legal_Hold   => False);
    end Create_Lock;
+
+   function Set_Hold (L : Retention_Lock) return Retention_Lock is
+      Result : Retention_Lock := L;
+   begin
+      Result.Legal_Hold := True;
+      return Result;
+   end Set_Hold;
+
+   function Release_Hold (L : Retention_Lock) return Retention_Lock is
+      Result : Retention_Lock := L;
+   begin
+      Result.Legal_Hold := False;
+      return Result;
+   end Release_Hold;
 
    function Extend_Retention
      (L         : Retention_Lock;
@@ -43,5 +58,16 @@ package body Dezhan.Trusted_Core.Retention with SPARK_Mode is
       --  Can_Delete for Compliance mode; gnatprove discharges it.
       null;
    end Lemma_Compliance_Is_Absolute;
+
+   procedure Lemma_Legal_Hold_Is_Absolute
+     (L    : Retention_Lock;
+      Now  : Trusted_Time;
+      Auth : Authorization)
+   is
+   begin
+      --  Proof-only: Can_Delete is False whenever Legal_Hold is set, by its
+      --  definition; gnatprove discharges the postcondition.
+      null;
+   end Lemma_Legal_Hold_Is_Absolute;
 
 end Dezhan.Trusted_Core.Retention;

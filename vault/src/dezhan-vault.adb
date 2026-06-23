@@ -202,7 +202,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                          & Lock_Mode'Pos (M.Lock.Mode)'Image
                          & M.Lock.Retain_Until'Image
                          & M.Lock.Created_At'Image
-                         & (if M.Composite then " 1" else " 0"));
+                         & (if M.Composite then " 1" else " 0")
+                         & (if M.Lock.Legal_Hold then " 1" else " 0"));
          end;
       end loop;
       Put_Line (F, "AUDIT" & Natural'Image (Natural (V.Self.Log.Length)));
@@ -255,7 +256,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                      (Mode         =>
                         Lock_Mode'Val (Integer'Value (Field (Line, 4))),
                       Retain_Until => Trusted_Time'Value (Field (Line, 5)),
-                      Created_At   => Trusted_Time'Value (Field (Line, 6))),
+                      Created_At   => Trusted_Time'Value (Field (Line, 6)),
+                      Legal_Hold   => Field (Line, 8) = "1"),
                    Composite => Field (Line, 7) = "1"));
             elsif Tag = "A" then
                V.Self.Log.Append
@@ -593,6 +595,42 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          end if;
       end;
    end Tick_Clock;
+
+   procedure Set_Legal_Hold (V : in out Vault_Type; Name : String) is
+   begin
+      if not V.Self.Index.Contains (Name) then
+         raise Not_Found;
+      end if;
+      declare
+         M : Meta := V.Self.Index.Element (Name);
+      begin
+         M.Lock := Set_Hold (M.Lock);
+         V.Self.Index.Replace (Name, M);
+         Add_Audit (V, Legal_Hold_Set, Name_Digest (Name),
+                    CG.Now (V.Self.Clock));
+         Save (V);
+      end;
+   end Set_Legal_Hold;
+
+   procedure Release_Legal_Hold (V : in out Vault_Type; Name : String) is
+   begin
+      if not V.Self.Index.Contains (Name) then
+         raise Not_Found;
+      end if;
+      declare
+         M : Meta := V.Self.Index.Element (Name);
+      begin
+         M.Lock := Release_Hold (M.Lock);
+         V.Self.Index.Replace (Name, M);
+         Add_Audit (V, Legal_Hold_Released, Name_Digest (Name),
+                    CG.Now (V.Self.Clock));
+         Save (V);
+      end;
+   end Release_Legal_Hold;
+
+   function Has_Legal_Hold (V : Vault_Type; Name : String) return Boolean is
+     (V.Self.Index.Contains (Name)
+      and then V.Self.Index.Element (Name).Lock.Legal_Hold);
 
    procedure Tick_From_System (V : in out Vault_Type) is
       Sample  : constant CG.Clock_Sample := Dezhan.Platform.Clock.Sample;
