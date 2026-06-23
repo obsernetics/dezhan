@@ -18,7 +18,10 @@ package Dezhan.Trusted_Core.Hashing with SPARK_Mode is
    --  serializations are far smaller; this also bounds the padded buffer.
    Max_Message : constant := 8192;
 
+   --  Post => True is a deliberate (trivial) contract: it stops gnatprove from
+   --  inlining the whole SHA-256 computation into every caller (audit, HMAC),
+   --  which keeps those callers' proofs fast. SHA256 is proved on its own.
    function SHA256 (Msg : Byte_Array) return Digest
-     with Pre => Msg'Length <= Max_Message;
+     with Pre => Msg'Length <= Max_Message, Post => True;
 
 end Dezhan.Trusted_Core.Hashing;
