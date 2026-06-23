@@ -373,6 +373,53 @@ procedure Dezhan_Server is
       end;
    end Header;
 
+   function Img (N : Natural) return String is (Trim (N'Image, Ada.Strings.Both));
+
+   --  Parse an HTTP Range value ("bytes=A-B", "bytes=A-", or "bytes=-N") against
+   --  a known total length. First/Last are 0-based inclusive byte offsets; Ok is
+   --  False if the spec is malformed or unsatisfiable.
+   procedure Parse_Range
+     (Value : String; Total : Natural;
+      First, Last : out Natural; Ok : out Boolean)
+   is
+      Eq   : constant Natural := Index (Value, "=");
+      Spec : constant String :=
+        (if Eq = 0 then "" else Value (Eq + 1 .. Value'Last));
+      Dash : Natural;
+   begin
+      First := 0;
+      Last  := 0;
+      Ok    := False;
+      if Spec = "" or else Total = 0 then
+         return;
+      end if;
+      Dash := Index (Spec, "-");
+      if Dash = 0 then
+         return;
+      end if;
+      if Dash = Spec'First then
+         declare
+            N : constant Natural := Natural'Value (Spec (Dash + 1 .. Spec'Last));
+         begin
+            if N = 0 then
+               return;
+            end if;
+            First := (if N >= Total then 0 else Total - N);
+            Last  := Total - 1;
+         end;
+      else
+         First := Natural'Value (Spec (Spec'First .. Dash - 1));
+         Last  := (if Dash = Spec'Last then Total - 1
+                   else Natural'Value (Spec (Dash + 1 .. Spec'Last)));
+         if Last > Total - 1 then
+            Last := Total - 1;
+         end if;
+      end if;
+      Ok := First <= Last and then First < Total;
+   exception
+      when others => Ok := False;
+   end Parse_Range;
+
    procedure Send
      (Ch      : Stream_Access;
       Status  : String;
@@ -718,13 +765,43 @@ procedure Dezhan_Server is
                     Extra => "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF);
 
                elsif Method = "GET" then
-                  if Contains (V, Name) then
-                     Send (Ch, "200 OK", "application/octet-stream",
-                           Get_Object (V, Name),
-                           Extra => "ETag: " & '"' & Object_Etag (V, Name)
-                                    & '"' & CRLF);
-                  else
+                  if not Contains (V, Name) then
                      Send_Text (Ch, "404 Not Found", "no such object");
+                  else
+                     declare
+                        Full : constant Stream_Element_Array :=
+                          Get_Object (V, Name);
+                        Rng  : constant String := Header (Head, "Range");
+                        Tag  : constant String :=
+                          "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF
+                          & "Accept-Ranges: bytes" & CRLF;
+                        Total : constant Natural := Natural (Full'Length);
+                     begin
+                        if Rng = "" then
+                           Send (Ch, "200 OK", "application/octet-stream",
+                                 Full, Extra => Tag);
+                        else
+                           declare
+                              First, Last : Natural;
+                              Ok          : Boolean;
+                           begin
+                              Parse_Range (Rng, Total, First, Last, Ok);
+                              if not Ok then
+                                 Send_Text (Ch, "416 Range Not Satisfiable", "",
+                                   Extra => "Content-Range: bytes */"
+                                            & Img (Total) & CRLF);
+                              else
+                                 Send (Ch, "206 Partial Content",
+                                   "application/octet-stream",
+                                   Full (Full'First + Stream_Element_Offset (First)
+                                         .. Full'First + Stream_Element_Offset (Last)),
+                                   Extra => Tag & "Content-Range: bytes "
+                                            & Img (First) & "-" & Img (Last)
+                                            & "/" & Img (Total) & CRLF);
+                              end if;
+                           end;
+                        end if;
+                     end;
                   end if;
 
                elsif Method = "HEAD" then
