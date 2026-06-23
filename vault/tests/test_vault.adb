@@ -285,6 +285,23 @@ begin
       After : constant Scrub_Report := Scrub (V);
    begin
       Check (After.Corrupt >= 1, "scrub detects the corrupted object");
+      Check (Quarantined_Count (V) >= 1, "unrepairable objects are quarantined");
+   end;
+   --  A quarantined object refuses reads instead of returning garbage.
+   declare
+      Raised : Boolean := False;
+   begin
+      begin
+         declare
+            X : constant Stream_Element_Array := Get_Object (V, "persist-me");
+            pragma Unreferenced (X);
+         begin
+            null;
+         end;
+      exception
+         when Object_Quarantined => Raised := True;
+      end;
+      Check (Raised, "read of a quarantined object is refused (410 Gone)");
    end;
 
    --  Air-gap seal: once the operator seals the vault, writes are refused, and

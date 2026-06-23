@@ -27,6 +27,7 @@ package Dezhan.Vault with SPARK_Mode => Off is
    No_Such_Upload  : exception;
    Egress_Denied   : exception; --  reads blocked in one-way-ingest mode
    Sync_Closed     : exception; --  writes blocked outside a sync window
+   Object_Quarantined : exception; --  read of an object scrub found unrepairable
 
    --  Open (or create) a vault rooted at Root, encrypted under Key.
    procedure Open (V : out Vault_Type; Root : String; Key : Key_256);
@@ -60,6 +61,10 @@ package Dezhan.Vault with SPARK_Mode => Off is
 
    function Contains (V : Vault_Type; Name : String) return Boolean;
    function Object_Count (V : Vault_Type) return Natural;
+
+   --  Number of objects scrub has quarantined (lost more than M shards, so
+   --  unrepairable). A read of a quarantined object raises Object_Quarantined.
+   function Quarantined_Count (V : Vault_Type) return Natural;
 
    --  The object's content id (its manifest hash), usable as an S3 ETag; "" if
    --  the object is absent.

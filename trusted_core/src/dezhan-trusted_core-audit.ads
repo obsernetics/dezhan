@@ -20,7 +20,7 @@ package Dezhan.Trusted_Core.Audit with SPARK_Mode is
    type Audit_Event is
      (Genesis, Lock_Created, Retention_Extended, Delete_Denied,
       Delete_Allowed, Clock_Anomaly, Seal_Engaged,
-      Legal_Hold_Set, Legal_Hold_Released);
+      Legal_Hold_Set, Legal_Hold_Released, Object_Quarantined);
 
    subtype Seq_Number is Natural;
 

@@ -20,9 +20,10 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    Clock_Tolerance : constant Trusted_Time := 2;
 
    type Meta is record
-      Id        : Object_Id;
-      Lock      : Retention_Lock;
-      Composite : Boolean := False;  --  Id points to a list of part ids
+      Id          : Object_Id;
+      Lock        : Retention_Lock;
+      Composite   : Boolean := False;  --  Id points to a list of part ids
+      Quarantined : Boolean := False;  --  scrub found it unrepairable (lost > M)
    end record;
 
    package Meta_Maps is new Ada.Containers.Indefinite_Hashed_Maps
@@ -203,7 +204,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                          & M.Lock.Retain_Until'Image
                          & M.Lock.Created_At'Image
                          & (if M.Composite then " 1" else " 0")
-                         & (if M.Lock.Legal_Hold then " 1" else " 0"));
+                         & (if M.Lock.Legal_Hold then " 1" else " 0")
+                         & (if M.Quarantined then " 1" else " 0"));
          end;
       end loop;
       Put_Line (F, "AUDIT" & Natural'Image (Natural (V.Self.Log.Length)));
@@ -258,7 +260,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                       Retain_Until => Trusted_Time'Value (Field (Line, 5)),
                       Created_At   => Trusted_Time'Value (Field (Line, 6)),
                       Legal_Hold   => Field (Line, 8) = "1"),
-                   Composite => Field (Line, 7) = "1"));
+                   Composite   => Field (Line, 7) = "1",
+                   Quarantined => Field (Line, 9) = "1"));
             elsif Tag = "A" then
                V.Self.Log.Append
                  (Audit_Entry'
@@ -310,7 +313,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          Lock    : constant Retention_Lock :=
            Create_Lock (Mode, At_Time + Retain_For, At_Time);
       begin
-         V.Self.Index.Include (Name, (Id => Id, Lock => Lock, Composite => False));
+         V.Self.Index.Include
+           (Name, (Id => Id, Lock => Lock, Composite => False,
+                   Quarantined => False));
          Add_Audit (V, Lock_Created, Name_Digest (Name), At_Time + Retain_For);
          Save (V);
       end;
@@ -328,6 +333,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       declare
          M : constant Meta := V.Self.Index.Element (Name);
       begin
+         if M.Quarantined then
+            raise Object_Quarantined;  --  scrub found it unrepairable
+         end if;
          if not M.Composite then
             return Get (Root, V.Self.Key, M.Id);
          end if;
@@ -439,7 +447,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
               Create_Lock (U.Mode, At_Time + U.Retain_For, At_Time);
          begin
             V.Self.Index.Include
-              (Name, (Id => List_Id, Lock => Lock, Composite => True));
+              (Name, (Id => List_Id, Lock => Lock, Composite => True,
+                      Quarantined => False));
             Add_Audit (V, Lock_Created, Name_Digest (Name),
                        At_Time + U.Retain_For);
          end;
@@ -476,27 +485,62 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    end Object_Names;
 
    function Scrub (V : Vault_Type) return Scrub_Report is
-      R    : Scrub_Report;
-      Root : constant String := To_String (V.Self.Root);
+      R       : Scrub_Report;
+      Root    : constant String := To_String (V.Self.Root);
+      Changed : Boolean := False;
    begin
       for Cur in V.Self.Index.Iterate loop
          R.Total := R.Total + 1;
          declare
-            Res : constant Repair_Result :=
-              Repair (Root, Meta_Maps.Element (Cur).Id);
+            Name : constant String := Meta_Maps.Key (Cur);
+            M    : Meta := Meta_Maps.Element (Cur);
+            Res  : constant Repair_Result := Repair (Root, M.Id);
          begin
             if not Res.Recoverable then
                R.Corrupt := R.Corrupt + 1;
-            elsif Res.Shards_Repaired > 0 then
-               R.Repaired := R.Repaired + 1;
-               R.Shards_Repaired := R.Shards_Repaired + Res.Shards_Repaired;
+               if not M.Quarantined then
+                  --  New unrepairable object: quarantine it and record it in
+                  --  the audit chain so the loss is visible and tamper-evident.
+                  M.Quarantined := True;
+                  V.Self.Index.Replace_Element (Cur, M);
+                  V.Self.Log.Append
+                    (Append (V.Self.Log.Last_Element, CG.Now (V.Self.Clock),
+                             Dezhan.Trusted_Core.Audit.Object_Quarantined,
+                             Name_Digest (Name), 0));
+                  Changed := True;
+               end if;
             else
-               R.Intact := R.Intact + 1;
+               if Res.Shards_Repaired > 0 then
+                  R.Repaired := R.Repaired + 1;
+                  R.Shards_Repaired := R.Shards_Repaired + Res.Shards_Repaired;
+               else
+                  R.Intact := R.Intact + 1;
+               end if;
+               if M.Quarantined then
+                  --  Redundancy was restored (e.g. shards copied back): lift it.
+                  M.Quarantined := False;
+                  V.Self.Index.Replace_Element (Cur, M);
+                  Changed := True;
+               end if;
             end if;
          end;
       end loop;
+      if Changed then
+         Save (V);
+      end if;
       return R;
    end Scrub;
+
+   function Quarantined_Count (V : Vault_Type) return Natural is
+      N : Natural := 0;
+   begin
+      for M of V.Self.Index loop
+         if M.Quarantined then
+            N := N + 1;
+         end if;
+      end loop;
+      return N;
+   end Quarantined_Count;
 
    function Collect_Garbage (V : in out Vault_Type) return Natural is
       Root : constant String := To_String (V.Self.Root);

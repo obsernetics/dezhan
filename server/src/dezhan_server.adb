@@ -423,6 +423,9 @@ procedure Dezhan_Server is
                "# HELP dezhan_objects Stored object count" & CRLF
                & "# TYPE dezhan_objects gauge" & CRLF
                & "dezhan_objects" & Natural'Image (Object_Count (V)) & CRLF
+               & "# HELP dezhan_quarantined Objects quarantined (unrepairable)" & CRLF
+               & "# TYPE dezhan_quarantined gauge" & CRLF
+               & "dezhan_quarantined" & Natural'Image (Quarantined_Count (V)) & CRLF
                & "# HELP dezhan_audit_entries Audit chain length" & CRLF
                & "# TYPE dezhan_audit_entries counter" & CRLF
                & "dezhan_audit_entries" & Natural'Image (Audit_Length (V)) & CRLF
@@ -606,6 +609,9 @@ procedure Dezhan_Server is
             Send_Text (Ch, "403 Forbidden", "reads are blocked (one-way ingest)");
          when Sync_Closed =>
             Send_Text (Ch, "409 Conflict", "sync window is closed");
+         when Object_Quarantined =>
+            Send_Text (Ch, "410 Gone",
+                       "object quarantined: unrepairable data loss");
       end;
    end Handle;
 
