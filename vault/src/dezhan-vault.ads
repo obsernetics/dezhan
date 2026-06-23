@@ -25,6 +25,8 @@ package Dezhan.Vault with SPARK_Mode => Off is
    Invalid_Mode    : exception;
    Vault_Sealed    : exception; --  raised by mutations while the vault is sealed
    No_Such_Upload  : exception;
+   Egress_Denied   : exception; --  reads blocked in one-way-ingest mode
+   Sync_Closed     : exception; --  writes blocked outside a sync window
 
    --  Open (or create) a vault rooted at Root, encrypted under Key.
    procedure Open (V : out Vault_Type; Root : String; Key : Key_256);
@@ -100,6 +102,21 @@ package Dezhan.Vault with SPARK_Mode => Off is
    --  Delete_Object raise Vault_Sealed. Sealing is recorded in the audit chain
    --  and persisted.
    procedure Seal (V : in out Vault_Type);
+
+   --  Air-gap controls (all persisted):
+   --   One-way ingest: data can enter but not leave; Get_Object raises
+   --     Egress_Denied while enabled.
+   --   Sync window: while closed, writes (store, multipart) raise Sync_Closed,
+   --     so transfers happen only in an approved window the operator opens.
+   procedure Set_One_Way_Ingest (V : in out Vault_Type; Enabled : Boolean);
+   function  One_Way_Ingest (V : Vault_Type) return Boolean;
+   procedure Open_Sync_Window  (V : in out Vault_Type);
+   procedure Close_Sync_Window (V : in out Vault_Type);
+   function  Sync_Window_Open  (V : Vault_Type) return Boolean;
+
+   --  Technology break: copy the whole store to an independent destination
+   --  (a different media class), yielding a self-contained, openable vault.
+   procedure Export (V : Vault_Type; Dest : String);
 
    function Now    (V : Vault_Type) return Trusted_Time;
 

@@ -105,8 +105,11 @@ demo key is used at rest).
   scrubbing; only Immutable buckets use the retention state machine.
 - Local auth realm, RBAC, quorum approvals, API tokens, service accounts.
 - Observability: structured logs (health endpoints and Prometheus metrics exist).
-- Air-gap features: the seal operation (operator read-only) is implemented;
-  sync windows, one-way ingest, and technology break are still to do.
+- Air-gap features (vault level, implemented): operator seal (read-only),
+  one-way ingest (Get raises Egress_Denied), sync windows (writes raise
+  Sync_Closed while closed), and technology-break export (copy the store to an
+  independent, openable destination). All persisted. Still to do: expose them
+  on the server admin API and add scheduled (wall-clock) sync windows.
 - Hardware-backed time anchor (TPM or secure RTC) behind the existing pluggable
   seam in the Clock Guard.
 - Durable, crash-safe persistence for trusted-core state.

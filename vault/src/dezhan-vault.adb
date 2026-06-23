@@ -53,6 +53,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Started    : Boolean := False; --  clock baseline taken from the first tick
       Op_Sealed  : Boolean := False; --  operator-initiated read-only seal
       Last_Boot  : Unbounded_String := Null_Unbounded_String;  --  kernel boot id
+      Ingest_Only : Boolean := False;  --  one-way ingest: reads blocked
+      Sync_Shut   : Boolean := False;  --  sync window closed: writes blocked
       Index      : Meta_Maps.Map;
       Log        : Log_Vectors.Vector;
       Uploads    : Upload_Maps.Map;  --  in-flight multipart uploads (transient)
@@ -65,6 +67,18 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    --  (trusted time never advanced), and freezing on every clock blip would be
    --  too aggressive.
    function Read_Only (V : Vault_Type) return Boolean is (V.Self.Op_Sealed);
+
+   --  Guard for ingest (store/upload): blocked by an operator seal or a closed
+   --  sync window.
+   procedure Check_Ingest (V : Vault_Type) is
+   begin
+      if V.Self.Op_Sealed then
+         raise Vault_Sealed;
+      end if;
+      if V.Self.Sync_Shut then
+         raise Sync_Closed;
+      end if;
+   end Check_Ingest;
 
    function Name_Digest (Name : String) return Digest is
       B : Byte_Array (0 .. Name'Length - 1);
@@ -177,6 +191,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                    & (if CG.Is_Sealed (V.Self.Clock) then " 1" else " 0")
                    & (if V.Self.Op_Sealed then " 1" else " 0"));
       Put_Line (F, "BOOT " & To_String (V.Self.Last_Boot));
+      Put_Line (F, "MODES " & (if V.Self.Ingest_Only then "1" else "0")
+                   & " " & (if V.Self.Sync_Shut then "1" else "0"));
       for Cur in V.Self.Index.Iterate loop
          declare
             Name : constant String := Meta_Maps.Key (Cur);
@@ -228,6 +244,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                V.Self.Started := False;  --  re-baseline monotonic on next tick
             elsif Tag = "BOOT" then
                V.Self.Last_Boot := To_Unbounded_String (Field (Line, 2));
+            elsif Tag = "MODES" then
+               V.Self.Ingest_Only := Field (Line, 2) = "1";
+               V.Self.Sync_Shut   := Field (Line, 3) = "1";
             elsif Tag = "OBJ" then
                V.Self.Index.Include
                  (Hex_To_Str (Field (Line, 2)),
@@ -278,9 +297,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Retain_For : Trusted_Time)
    is
    begin
-      if Read_Only (V) then
-         raise Vault_Sealed;
-      end if;
+      Check_Ingest (V);
       if Mode = Unlocked then
          raise Invalid_Mode;
       end if;
@@ -300,6 +317,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    function Get_Object (V : Vault_Type; Name : String) return Stream_Element_Array is
       Root : constant String := To_String (V.Self.Root);
    begin
+      if V.Self.Ingest_Only then
+         raise Egress_Denied;
+      end if;
       if not V.Self.Index.Contains (Name) then
          raise Not_Found;
       end if;
@@ -354,9 +374,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Retain_For : Trusted_Time) return String
    is
    begin
-      if Read_Only (V) then
-         raise Vault_Sealed;
-      end if;
+      Check_Ingest (V);
       if Mode = Unlocked then
          raise Invalid_Mode;
       end if;
@@ -378,9 +396,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
      (V : in out Vault_Type; Upload_Id : String; Data : Stream_Element_Array)
    is
    begin
-      if Read_Only (V) then
-         raise Vault_Sealed;
-      end if;
+      Check_Ingest (V);
       if not V.Self.Uploads.Contains (Upload_Id) then
          raise No_Such_Upload;
       end if;
@@ -396,9 +412,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
 
    procedure Complete_Upload (V : in out Vault_Type; Upload_Id : String) is
    begin
-      if Read_Only (V) then
-         raise Vault_Sealed;
-      end if;
+      Check_Ingest (V);
       if not V.Self.Uploads.Contains (Upload_Id) then
          raise No_Such_Upload;
       end if;
@@ -597,6 +611,57 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          Save (V);
       end if;
    end Seal;
+
+   procedure Set_One_Way_Ingest (V : in out Vault_Type; Enabled : Boolean) is
+   begin
+      V.Self.Ingest_Only := Enabled;
+      Save (V);
+   end Set_One_Way_Ingest;
+
+   function One_Way_Ingest (V : Vault_Type) return Boolean is
+     (V.Self.Ingest_Only);
+
+   procedure Open_Sync_Window (V : in out Vault_Type) is
+   begin
+      V.Self.Sync_Shut := False;
+      Save (V);
+   end Open_Sync_Window;
+
+   procedure Close_Sync_Window (V : in out Vault_Type) is
+   begin
+      V.Self.Sync_Shut := True;
+      Save (V);
+   end Close_Sync_Window;
+
+   function Sync_Window_Open (V : Vault_Type) return Boolean is
+     (not V.Self.Sync_Shut);
+
+   procedure Export (V : Vault_Type; Dest : String) is
+      procedure Copy_Tree (Src, Dst : String) is
+         S : Search_Type;
+         E : Directory_Entry_Type;
+      begin
+         Create_Path (Dst);
+         Start_Search (S, Src, "");
+         while More_Entries (S) loop
+            Get_Next_Entry (S, E);
+            declare
+               Name : constant String := Simple_Name (E);
+            begin
+               if Name /= "." and then Name /= ".." then
+                  if Kind (E) = Directory then
+                     Copy_Tree (Full_Name (E), Compose (Dst, Name));
+                  else
+                     Copy_File (Full_Name (E), Compose (Dst, Name));
+                  end if;
+               end if;
+            end;
+         end loop;
+         End_Search (S);
+      end Copy_Tree;
+   begin
+      Copy_Tree (To_String (V.Self.Root), Dest);
+   end Export;
 
    function Now (V : Vault_Type) return Trusted_Time is
      (CG.Now (V.Self.Clock));

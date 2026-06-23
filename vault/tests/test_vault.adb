@@ -206,6 +206,54 @@ begin
       Check (Collect_Garbage (V) = 0, "second GC reclaims nothing (idempotent)");
    end;
 
+   --  Air-gap controls: one-way ingest blocks reads; a closed sync window blocks
+   --  writes.
+   declare
+      Egress_Raised : Boolean := False;
+      Sync_Raised   : Boolean := False;
+   begin
+      Set_One_Way_Ingest (V, True);
+      Check (One_Way_Ingest (V), "one-way ingest enabled");
+      begin
+         declare
+            X : constant Stream_Element_Array := Get_Object (V, "persist-me");
+         begin
+            Egress_Raised := X'Length = 0;  --  reached only if no exception
+         end;
+      exception
+         when Egress_Denied => Egress_Raised := True;
+      end;
+      Check (Egress_Raised, "reads blocked in one-way-ingest mode");
+      Set_One_Way_Ingest (V, False);
+      Check (Equal (Get_Object (V, "persist-me"), Bytes ("durable payload")),
+             "reads restored after disabling one-way ingest");
+
+      Close_Sync_Window (V);
+      Check (not Sync_Window_Open (V), "sync window closed");
+      begin
+         Put_Object (V, "blocked", Bytes ("x"), Compliance, Retain_For => 10);
+      exception
+         when Sync_Closed => Sync_Raised := True;
+      end;
+      Check (Sync_Raised, "writes blocked while the sync window is closed");
+      Open_Sync_Window (V);
+      Check (Sync_Window_Open (V), "sync window reopened");
+   end;
+
+   --  Technology break: export to an independent destination and open it there.
+   declare
+      Dest  : constant String := "/tmp/dezhan_export";
+      V_Exp : Vault_Type;
+   begin
+      if Ada.Directories.Exists (Dest) then
+         Ada.Directories.Delete_Tree (Dest);
+      end if;
+      Export (V, Dest);
+      Open (V_Exp, Dest, Key);
+      Check (Equal (Get_Object (V_Exp, "persist-me"), Bytes ("durable payload")),
+             "exported copy is an independent, readable vault");
+   end;
+
    --  Background scrubbing: a clean sweep reports all objects intact; after a
    --  chunk is corrupted on disk, the scrub detects it.
    declare
