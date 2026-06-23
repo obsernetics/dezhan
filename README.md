@@ -72,6 +72,7 @@ storage/        content-addressed storage engine (Ada)
 vault/          WORM orchestration over the trusted core (Ada)
 server/         HTTP/S3-style server + web UI (Ada, GNAT.Sockets)
 cli/            command-line client (Ada)
+auth/           AWS SigV4 signing core (Ada, on the verified HMAC-SHA256)
 ```
 
 ## Run the POC
