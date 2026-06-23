@@ -17,6 +17,7 @@ with Ada.Streams; use Ada.Streams;
 with Dezhan.Trusted_Core.Times;       use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Retention;   use Dezhan.Trusted_Core.Retention;
 with Dezhan.Trusted_Core.Cipher;      use Dezhan.Trusted_Core.Cipher;
+with Dezhan.Storage.Cas;
 package Dezhan.Vault with SPARK_Mode => Off is
 
    type Vault_Type is limited private;
@@ -28,6 +29,8 @@ package Dezhan.Vault with SPARK_Mode => Off is
    Egress_Denied   : exception; --  reads blocked in one-way-ingest mode
    Sync_Closed     : exception; --  writes blocked outside a sync window
    Object_Quarantined : exception; --  read of an object scrub found unrepairable
+   --  Get of an object whose keyed auth tag does not verify (wrong key/tamper).
+   Auth_Failed     : exception renames Dezhan.Storage.Cas.Auth_Failed;
 
    --  Open (or create) a vault rooted at Root, encrypted under Key.
    procedure Open (V : out Vault_Type; Root : String; Key : Key_256);

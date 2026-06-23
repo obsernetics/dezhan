@@ -22,6 +22,10 @@ package Dezhan.Storage.Cas with SPARK_Mode => Off is
    --  Raised by Get/Verify when stored bytes do not match their digest.
    Corruption_Detected : exception;
 
+   --  Raised by Get when the object's keyed authentication tag does not verify:
+   --  a wrong key, a missing tag, or tampering with the stored object.
+   Auth_Failed : exception;
+
    --  Raised by Put when the object exceeds the current single-manifest limit.
    Object_Too_Large : exception;
 

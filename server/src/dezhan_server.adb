@@ -612,6 +612,9 @@ procedure Dezhan_Server is
          when Object_Quarantined =>
             Send_Text (Ch, "410 Gone",
                        "object quarantined: unrepairable data loss");
+         when Auth_Failed =>
+            Send_Text (Ch, "403 Forbidden",
+                       "authentication failed (wrong key or tampering)");
       end;
    end Handle;
 

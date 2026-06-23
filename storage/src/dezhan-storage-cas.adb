@@ -24,6 +24,11 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
    Hdr     : constant := 29;
    Nonce_Off : constant := 17;
 
+   --  Key-separation labels and the per-object auth-tag file name.
+   Enc_Label : constant String := "dezhan/enc/chacha20";
+   Mac_Label : constant String := "dezhan/mac/hmac-sha256";
+   Tag_Name  : constant String := "tag";
+
    --  Reed-Solomon shard layout: a blob (chunk or manifest) is split into K data
    --  shards of EC_SL bytes (one per EC_SL of length) plus EC_M parity shards.
    --  Any K of the K+M shards reconstruct the blob, so up to EC_M lost or corrupt
@@ -93,6 +98,53 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       end loop;
       return N;
    end Derive_Nonce;
+
+   --  Key separation: independent 256-bit subkeys for encryption and
+   --  authentication, derived from the master key so the same key bytes never
+   --  drive both ChaCha20 and HMAC. HMAC-SHA256 output is exactly 256 bits.
+   function Subkey (Key : Key_256; Label : String) return Key_256 is
+      KB : Byte_Array (0 .. 31);
+      LB : Byte_Array (0 .. Label'Length - 1);
+      H  : Digest;
+      R  : Key_256;
+   begin
+      for I in 0 .. 31 loop
+         KB (I) := Key (I);
+      end loop;
+      for I in 0 .. Label'Length - 1 loop
+         LB (I) := Byte (Character'Pos (Label (Label'First + I)));
+      end loop;
+      H := HMAC_SHA256 (KB, LB);
+      for I in R'Range loop
+         R (I) := H (I);
+      end loop;
+      return R;
+   end Subkey;
+
+   --  Authentication tag for an object: HMAC over the manifest digest under the
+   --  MAC subkey. The manifest digest (the object id) commits to every chunk's
+   --  cipher-text digest, the nonce, and the lengths, so the tag authenticates
+   --  the whole object. Encrypt-then-MAC: a wrong key or any tampering fails the
+   --  tag check before the plaintext is ever produced.
+   function Object_Tag (MK : Key_256; Manifest_Digest : Digest) return Digest is
+      KB : Byte_Array (0 .. 31);
+      MB : Byte_Array (0 .. 31);
+   begin
+      for I in 0 .. 31 loop
+         KB (I) := MK (I);
+         MB (I) := Manifest_Digest (I);
+      end loop;
+      return HMAC_SHA256 (KB, MB);
+   end Object_Tag;
+
+   function Digest_Bytes (D : Digest) return Byte_Array is
+      R : Byte_Array (0 .. 31);
+   begin
+      for I in 0 .. 31 loop
+         R (I) := D (I);
+      end loop;
+      return R;
+   end Digest_Bytes;
 
    function To_Hex (D : Digest) return Object_Id is
       R : Object_Id := (others => '0');
@@ -449,14 +501,16 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       --  Compress the whole object first; keep the smaller of deflate/stored.
       Comp     : constant Deflate.Buffer := Deflate.Deflate (To_Defl (Data));
       Compress : constant Boolean := Comp'Length < Orig_Len;
+      EK       : constant Key_256 := Subkey (Key, Enc_Label);
+      MK       : constant Key_256 := Subkey (Key, Mac_Label);
    begin
       declare
          Payload  : constant Stream_Element_Array :=
            (if Compress then From_Defl (Comp) else Data);
          P_Len    : constant Natural := Natural (Payload'Length);
          N_Chunks : constant Natural := (P_Len + Chunk_Size - 1) / Chunk_Size;
-         --  Per-object nonce, derived from the stored payload and key.
-         Nonce    : constant Nonce_96 := Derive_Nonce (Key, Payload);
+         --  Per-object nonce, derived from the stored payload and enc subkey.
+         Nonce    : constant Nonce_96 := Derive_Nonce (EK, Payload);
       begin
          if Hdr + N_Chunks * 32 > Max_Message then
             raise Object_Too_Large;
@@ -487,7 +541,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                      Bytes : Byte_Array := To_Bytes (Payload (First .. Last));
                   begin
                      --  Encrypt at source, then address and store cipher text.
-                     XCrypt (Key, Nonce, Counter_For (C), Bytes);
+                     XCrypt (EK, Nonce, Counter_For (C), Bytes);
                      declare
                         CD  : constant Digest    := SHA256 (Bytes);
                         Hex : constant Object_Id := To_Hex (CD);
@@ -507,6 +561,10 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                MHex : constant Object_Id := To_Hex (MD);
             begin
                Store_Shards (Manifest_Path (Root, MHex), To_Stream (Manifest));
+               --  Encrypt-then-MAC: bind the object to the key with a keyed tag
+               --  over its manifest digest.
+               Write_File (Compose (Manifest_Path (Root, MHex), Tag_Name),
+                           To_Stream (Digest_Bytes (Object_Tag (MK, MD))));
                return MHex;
             end;
          end;
@@ -523,9 +581,38 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
    is
       Manifest_Bytes : constant Byte_Array :=
         To_Bytes (Read_Shards (Manifest_Path (Root, Id)));
+      MD : constant Digest  := SHA256 (Manifest_Bytes);
+      EK : constant Key_256 := Subkey (Key, Enc_Label);
+      MK : constant Key_256 := Subkey (Key, Mac_Label);
    begin
-      if To_Hex (SHA256 (Manifest_Bytes)) /= Id then
+      if To_Hex (MD) /= Id then
          raise Corruption_Detected;
+      end if;
+
+      --  Authenticate under the key before producing any plaintext (only on a
+      --  real read; Verify is keyless and checks cipher-text integrity only).
+      if Reassemble then
+         declare
+            Tag_Path : constant String :=
+              Compose (Manifest_Path (Root, Id), Tag_Name);
+            Expect   : constant Digest := Object_Tag (MK, MD);
+         begin
+            if not Exists (Tag_Path) then
+               raise Auth_Failed;
+            end if;
+            declare
+               Got : constant Byte_Array := To_Bytes (Read_File (Tag_Path));
+            begin
+               if Got'Length /= 32 then
+                  raise Auth_Failed;
+               end if;
+               for I in 0 .. 31 loop
+                  if Got (I) /= Expect (I) then
+                     raise Auth_Failed;
+                  end if;
+               end loop;
+            end;
+         end;
       end if;
 
       declare
@@ -555,7 +642,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                      raise Corruption_Detected;  --  cipher-text integrity
                   end if;
                   if Reassemble then
-                     XCrypt (Key, Nonce, Counter_For (C), Bytes);  --  decrypt
+                     XCrypt (EK, Nonce, Counter_For (C), Bytes);  --  decrypt
                      for I in Bytes'Range loop
                         Payload (Pos + Stream_Element_Offset (I)) :=
                           Stream_Element (Bytes (I));

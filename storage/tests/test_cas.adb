@@ -113,20 +113,50 @@ begin
       Id    : constant Object_Id := Put (Root, Key, Data);
       Back  : constant Stream_Element_Array := Get (Root, Key, Id);
 
-      --  A wrong key decrypts to garbage; since objects are compressed before
-      --  encryption, that garbage usually fails to inflate (Format_Error). Either
-      --  way the original is not recovered.
-      function Wrong_Key_Recovers return Boolean is
+      --  Encrypt-then-MAC: a wrong key fails the keyed auth tag before any
+      --  plaintext is produced, so Get raises Auth_Failed (not garbage).
+      function Wrong_Key_Rejected return Boolean is
       begin
-         return Equal (Get (Root, Wrong_Key, Id), Data);
+         declare
+            Ignore : constant Stream_Element_Array := Get (Root, Wrong_Key, Id);
+            pragma Unreferenced (Ignore);
+         begin
+            return False;  --  reached only if no exception was raised
+         end;
       exception
-         when others => return False;
-      end Wrong_Key_Recovers;
+         when Auth_Failed => return True;
+         when others      => return False;
+      end Wrong_Key_Rejected;
    begin
       Check (Equal (Back, Data), "round-trip with the right key returns the original");
-      Check (not Wrong_Key_Recovers, "wrong key does not recover the data (encrypted at rest)");
+      Check (Wrong_Key_Rejected,
+             "wrong key is cryptographically rejected (Auth_Failed)");
       Check (Verify (Root, Id), "verify reports the object intact");
       Check (Put (Root, Key, Data) = Id, "same bytes and key yield the same id");
+
+      --  Tampering is detected: stripping the keyed tag of a (separate) object
+      --  makes Get reject it instead of returning data.
+      declare
+         T_Data : constant Stream_Element_Array := (1 .. 50 => 7);
+         Id_T   : constant Object_Id := Put (Root, Key, T_Data);
+         Tag    : constant String := Compose
+           (Compose (Compose (Root, "manifests"), String (Id_T)), "tag");
+         Raised : Boolean := False;
+      begin
+         Delete_File (Tag);
+         begin
+            declare
+               X : constant Stream_Element_Array := Get (Root, Key, Id_T);
+               pragma Unreferenced (X);
+            begin
+               null;
+            end;
+         exception
+            when Auth_Failed => Raised := True;
+            when others      => null;
+         end;
+         Check (Raised, "missing or tampered auth tag is detected (Auth_Failed)");
+      end;
 
       --  Erasure coding: losing up to M=2 shards of a chunk is recoverable.
       Check (Delete_N_Shards (Root, 2) = 2, "removed 2 of 6 shards from a chunk");
