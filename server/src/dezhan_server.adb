@@ -40,6 +40,10 @@ procedure Dezhan_Server is
 
    V : Vault_Type;
 
+   --  Latest background-scrub result (for /metrics).
+   Last_Scrub : Scrub_Report;
+   Scrub_Runs : Natural := 0;
+
    LF : constant String := ASCII.LF & "";
 
    --  Minimal single-page UI. Uses single quotes throughout so the Ada string
@@ -197,7 +201,13 @@ procedure Dezhan_Server is
                & "dezhan_sealed" & (if Sealed (V) then " 1" else " 0") & CRLF
                & "# HELP dezhan_trusted_time Trusted monotonic time" & CRLF
                & "# TYPE dezhan_trusted_time counter" & CRLF
-               & "dezhan_trusted_time" & Trusted_Time'Image (Now (V)) & CRLF);
+               & "dezhan_trusted_time" & Trusted_Time'Image (Now (V)) & CRLF
+               & "# HELP dezhan_scrub_runs Background scrub passes" & CRLF
+               & "# TYPE dezhan_scrub_runs counter" & CRLF
+               & "dezhan_scrub_runs" & Natural'Image (Scrub_Runs) & CRLF
+               & "# HELP dezhan_scrub_corrupt Objects found corrupt in last scrub" & CRLF
+               & "# TYPE dezhan_scrub_corrupt gauge" & CRLF
+               & "dezhan_scrub_corrupt" & Natural'Image (Last_Scrub.Corrupt) & CRLF);
 
          elsif Method = "POST" and then Path = "/admin/tick" then
             Send_Text (Ch, "200 OK", "trusted_time" & Trusted_Time'Image (Now (V)));
@@ -205,6 +215,14 @@ procedure Dezhan_Server is
          elsif Method = "POST" and then Path = "/admin/seal" then
             Seal (V);
             Send_Text (Ch, "200 OK", "vault sealed (read-only)");
+
+         elsif Method = "POST" and then Path = "/admin/scrub" then
+            Last_Scrub := Scrub (V);
+            Scrub_Runs := Scrub_Runs + 1;
+            Send_Text (Ch, "200 OK",
+              "scrub total" & Natural'Image (Last_Scrub.Total)
+              & " intact" & Natural'Image (Last_Scrub.Intact)
+              & " corrupt" & Natural'Image (Last_Scrub.Corrupt));
 
          elsif Method = "GET" and then (Path = "/v" or else Path = "/v/") then
             Send_Text (Ch, "200 OK", Object_Names (V));
@@ -277,6 +295,10 @@ procedure Dezhan_Server is
    Sock   : Socket_Type;
    Addr   : Sock_Addr_Type;
    From   : Sock_Addr_Type;
+   Sel    : Selector_Type;
+   R_Set  : Socket_Set_Type;
+   W_Set  : Socket_Set_Type;
+   Status : Selector_Status;
 begin
    Open (V, Root, Key);
    Initialize;
@@ -286,17 +308,34 @@ begin
    Addr.Port := Port;
    Bind_Socket (Server, Addr);
    Listen_Socket (Server);
+   Create_Selector (Sel);
    Put_Line ("dezhan server listening on port" & Port_Type'Image (Port)
              & " (root " & Root & ")");
 
+   --  Single-threaded loop: wait up to 30s for a connection; on timeout, run a
+   --  background integrity scrub. No concurrency, so no locking is needed.
    loop
       begin
-         Accept_Socket (Server, Sock, From);
-         Handle (Stream (Sock));
-         Close_Socket (Sock);
+         Empty (R_Set);
+         Empty (W_Set);
+         Set (R_Set, Server);
+         Check_Selector (Sel, R_Set, W_Set, Status, Timeout => 30.0);
+         if Status = Completed then
+            Accept_Socket (Server, Sock, From);
+            Handle (Stream (Sock));
+            Close_Socket (Sock);
+         else
+            --  Idle: scrub all objects in the background.
+            Last_Scrub := Scrub (V);
+            Scrub_Runs := Scrub_Runs + 1;
+            if Last_Scrub.Corrupt > 0 then
+               Put_Line ("scrub: " & Natural'Image (Last_Scrub.Corrupt)
+                         & " corrupt object(s) detected");
+            end if;
+         end if;
       exception
          when E : others =>
-            Put_Line ("request error: " & Exception_Message (E));
+            Put_Line ("loop error: " & Exception_Message (E));
             begin
                Close_Socket (Sock);
             exception

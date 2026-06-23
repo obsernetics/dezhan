@@ -43,6 +43,17 @@ package Dezhan.Vault with SPARK_Mode => Off is
    --  Newline-separated list of stored object names.
    function Object_Names (V : Vault_Type) return String;
 
+   --  Result of an integrity scrub over every stored object.
+   type Scrub_Report is record
+      Total   : Natural := 0;
+      Intact  : Natural := 0;
+      Corrupt : Natural := 0;
+   end record;
+
+   --  Verify every object's manifest and chunks against their digests
+   --  (detects silent corruption / bit rot). Read-only; needs no key.
+   function Scrub (V : Vault_Type) return Scrub_Report;
+
    --  Attempt to delete Name. Returns True iff retention permitted it (Bypass
    --  only helps in Governance mode). The outcome is recorded in the audit chain.
    function Delete_Object

@@ -34,9 +34,11 @@ Platform layer (regular Ada), an end-to-end POC on top of the verified core:
   a bypass), a manipulated clock cannot expire it, and every action is recorded
   in a self-verifying audit chain.
 - **Server** (`dezhan_server`): a small HTTP API (PUT/GET/HEAD/DELETE under
-  `/v/<name>`, `GET /v` to list, `POST /admin/seal` for read-only mode, plus
-  `/healthz`, Prometheus `/metrics`, and a minimal web UI at `/`), built on
-  `GNAT.Sockets` with no external dependency.
+  `/v/<name>`, `GET /v` to list, `POST /admin/seal` for read-only mode,
+  `POST /admin/scrub`, plus `/healthz`, Prometheus `/metrics`, and a minimal web
+  UI at `/`), built on `GNAT.Sockets` with no external dependency. It also runs a
+  background integrity scrub during idle periods (single-threaded, via a socket
+  selector timeout).
 - **CLI** (`dezhan_cli`): a thin client for the server.
 
 The vault persists its object index, audit chain, and trusted-time high-water

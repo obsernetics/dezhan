@@ -51,7 +51,13 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   detection, and encryption at source (ChaCha20, `Dezhan.Trusted_Core.Cipher`).
   Still to do: content-defined chunking, multi-level manifests for large objects
   (a single object is currently capped near 1 MB), compression, a background
-  scrubber loop, and garbage collection of unreferenced chunks.
+  garbage collection of unreferenced chunks (a deleted object's chunks are
+  currently orphaned, not reclaimed).
+- Background scrubbing is implemented: `Vault.Scrub` verifies every object's
+  manifest and chunks against their digests; the server runs it during idle
+  periods and exposes `POST /admin/scrub` plus `dezhan_scrub_*` metrics. Still to
+  do: scheduling policy/cadence and quarantining or auto-repairing detected
+  corruption (the latter needs erasure-coding integration).
 - Key management is not implemented: where the vault key comes from, rotation,
   per-object keys, and key wrapping are future work. The store takes a key from
   the caller; tests use a fixed key and a zero nonce with a per-chunk counter

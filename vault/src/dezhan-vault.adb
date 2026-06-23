@@ -295,6 +295,20 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       return To_String (R);
    end Object_Names;
 
+   function Scrub (V : Vault_Type) return Scrub_Report is
+      R : Scrub_Report;
+   begin
+      for Cur in V.Self.Index.Iterate loop
+         R.Total := R.Total + 1;
+         if Verify (To_String (V.Self.Root), Meta_Maps.Element (Cur).Id) then
+            R.Intact := R.Intact + 1;
+         else
+            R.Corrupt := R.Corrupt + 1;
+         end if;
+      end loop;
+      return R;
+   end Scrub;
+
    function Delete_Object
      (V : in out Vault_Type; Name : String; Bypass : Boolean) return Boolean
    is

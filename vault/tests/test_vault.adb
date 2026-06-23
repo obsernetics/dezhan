@@ -3,6 +3,7 @@ with Ada.Text_IO;      use Ada.Text_IO;
 with Ada.Command_Line; use Ada.Command_Line;
 with Ada.Directories;
 with Ada.Streams;      use Ada.Streams;
+with Ada.Streams.Stream_IO;
 with Dezhan.Trusted_Core.Times;     use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Retention; use Dezhan.Trusted_Core.Retention;
 with Dezhan.Trusted_Core.Cipher;    use Dezhan.Trusted_Core.Cipher;
@@ -51,6 +52,46 @@ procedure Test_Vault is
       end loop;
       return True;
    end Equal;
+
+   --  Flip a byte in every stored chunk file, simulating bit rot. Corrupts all
+   --  chunks (orphaned and live) so any live object is guaranteed affected.
+   function Corrupt_All_Chunks return Natural is
+      use Ada.Directories;
+      Sub     : Search_Type;
+      Dir     : Directory_Entry_Type;
+      Damaged : Natural := 0;
+   begin
+      Start_Search (Sub, Compose (Root, "objects"), "",
+                    (Directory => True, others => False));
+      while More_Entries (Sub) loop
+         Get_Next_Entry (Sub, Dir);
+         if Simple_Name (Dir) /= "." and then Simple_Name (Dir) /= ".." then
+            declare
+               Files : Search_Type;
+               FE    : Directory_Entry_Type;
+            begin
+               Start_Search (Files, Full_Name (Dir), "",
+                             (Ordinary_File => True, others => False));
+               while More_Entries (Files) loop
+                  Get_Next_Entry (Files, FE);
+                  declare
+                     F : Ada.Streams.Stream_IO.File_Type;
+                     B : constant Stream_Element_Array (1 .. 1) := (1 => 255);
+                  begin
+                     Ada.Streams.Stream_IO.Open
+                       (F, Ada.Streams.Stream_IO.Out_File, Full_Name (FE));
+                     Ada.Streams.Stream_IO.Write (F, B);
+                     Ada.Streams.Stream_IO.Close (F);
+                     Damaged := Damaged + 1;
+                  end;
+               end loop;
+               End_Search (Files);
+            end;
+         end if;
+      end loop;
+      End_Search (Sub);
+      return Damaged;
+   end Corrupt_All_Chunks;
 
    V : Vault_Type;
 
@@ -119,6 +160,21 @@ begin
              "earlier deletion persisted across reopen");
       Check (not Delete_Object (V2, "persist-me", Bypass => True),
              "retention survives reopen (still locked)");
+   end;
+
+   --  Background scrubbing: a clean sweep reports all objects intact; after a
+   --  chunk is corrupted on disk, the scrub detects it.
+   declare
+      Before : constant Scrub_Report := Scrub (V);
+   begin
+      Check (Before.Total >= 1 and then Before.Corrupt = 0,
+             "scrub reports all objects intact");
+   end;
+   Check (Corrupt_All_Chunks > 0, "stored chunks were corrupted on disk");
+   declare
+      After : constant Scrub_Report := Scrub (V);
+   begin
+      Check (After.Corrupt >= 1, "scrub detects the corrupted object");
    end;
 
    --  Air-gap seal: once the operator seals the vault, writes are refused, and
