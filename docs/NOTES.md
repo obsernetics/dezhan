@@ -70,12 +70,15 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   survives a restart (write-temp-then-rename; full crash-safety with fsync and a
   binary format is still to do). Still to do: AWS SigV4 authentication, multipart
   uploads, S3 bucket/prefix semantics (a flat object list exists via GET /v),
-concurrency (the server is single-threaded). The SigV4 signing core
-(`Dezhan.Sigv4`, on the RFC 4231-validated `Dezhan.Trusted_Core.HMAC`) is
-implemented and validated byte-for-byte against the AWS worked example. Still to
-do: wire it into the server (canonicalize the live request: URI/header
-canonicalization, payload hash, credential store) and validate against real S3
-clients; that request-canonicalization exactness is the remaining work.
+concurrency (the server is single-threaded). SigV4 authentication is implemented
+and enforced: the signing core (`Dezhan.Sigv4`, on the RFC 4231-validated
+`Dezhan.Trusted_Core.HMAC`) is validated byte-for-byte against the AWS worked
+example; the server verifies an `AWS4-HMAC-SHA256` Authorization header on `/v`
+requests against a demo credential (anonymous allowed unless
+`DEZHAN_REQUIRE_AUTH` is set, then 401; bad signature 403), and the CLI `sput`
+command signs requests. Remaining: a multi-account credential store, query-string
+canonicalization, and interop validation against real S3 clients (Veeam/restic),
+whose exact canonicalization should be confirmed end to end.
   structured logs, and real key management (a fixed demo key is used).
 - General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays

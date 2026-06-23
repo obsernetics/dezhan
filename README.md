@@ -38,8 +38,11 @@ Platform layer (regular Ada), an end-to-end POC on top of the verified core:
   `POST /admin/scrub`, plus `/healthz`, Prometheus `/metrics`, and a minimal web
   UI at `/`), built on `GNAT.Sockets` with no external dependency. It also runs a
   background integrity scrub during idle periods (single-threaded, via a socket
-  selector timeout).
-- **CLI** (`dezhan_cli`): a thin client for the server.
+  selector timeout). `/v` requests are authenticated with AWS SigV4 when an
+  `Authorization` header is present (anonymous unless `DEZHAN_REQUIRE_AUTH` is
+  set).
+- **CLI** (`dezhan_cli`): a thin client for the server, including `sput` to send
+  a SigV4-signed PUT.
 
 The vault persists its object index, audit chain, and trusted-time high-water
 mark to disk, so it survives a restart. SigV4 authentication, multipart uploads,
