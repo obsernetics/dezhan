@@ -1,17 +1,28 @@
 pragma Ada_2022;
---  Minimal HTTP server exposing the dezhan vault (POC). No external dependency:
---  it uses GNAT.Sockets and a hand-rolled HTTP/1.1 request reader. SigV4 auth and
---  multipart are not implemented in this POC (see docs/NOTES.md); object-lock
---  parameters are passed via X-Dezhan-* headers.
+--  HTTP server exposing the dezhan vault. No external dependency: it uses
+--  GNAT.Sockets and a hand-rolled HTTP/1.1 request reader. SigV4 authentication
+--  is enforced on /v requests when an Authorization header is present (and
+--  required when DEZHAN_REQUIRE_AUTH is set); multipart upload is supported.
+--  Object-lock parameters are passed via X-Dezhan-* headers. Remaining S3-fidelity
+--  items (query-string SigV4 canonicalization, multi-account credentials, ETags)
+--  are tracked in docs/NOTES.md.
 --
 --  Routes:
+--    GET    /                   web UI
 --    GET    /healthz            liveness
 --    GET    /metrics            Prometheus metrics
 --    POST   /admin/tick         advance trusted time from the system clock
+--    POST   /admin/seal         operator seal (read-only)
+--    POST   /admin/scrub        run an integrity scrub
+--    GET    /v                  list objects
 --    PUT    /v/<name>           store (headers X-Dezhan-Mode, X-Dezhan-Retain)
 --    GET    /v/<name>           retrieve
 --    HEAD   /v/<name>           existence
 --    DELETE /v/<name>           delete if retention allows (X-Dezhan-Bypass)
+--    POST   /v/<name>?uploads             begin multipart upload
+--    PUT    /v/<name>?uploadId=<id>       upload a part
+--    POST   /v/<name>?uploadId=<id>       complete the upload
+--    DELETE /v/<name>?uploadId=<id>       abort the upload
 with Ada.Text_IO;          use Ada.Text_IO;
 with Ada.Command_Line;     use Ada.Command_Line;
 with Ada.Strings;          use Ada.Strings;
