@@ -1,3 +1,5 @@
+with Ada.Strings;                      use Ada.Strings;
+with Ada.Strings.Fixed;                use Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;            use Ada.Strings.Unbounded;
 with Ada.Strings.Hash;
 with Ada.Text_IO;                       use Ada.Text_IO;
@@ -17,8 +19,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    Clock_Tolerance : constant Trusted_Time := 2;
 
    type Meta is record
-      Id   : Object_Id;
-      Lock : Retention_Lock;
+      Id        : Object_Id;
+      Lock      : Retention_Lock;
+      Composite : Boolean := False;  --  Id points to a list of part ids
    end record;
 
    package Meta_Maps is new Ada.Containers.Indefinite_Hashed_Maps
@@ -28,14 +31,30 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    package Log_Vectors is new Ada.Containers.Vectors
      (Index_Type => Natural, Element_Type => Audit_Entry);
 
+   package Id_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Natural, Element_Type => Object_Id);
+
+   type Upload is record
+      Name       : Unbounded_String;
+      Mode       : Lock_Mode := Compliance;
+      Retain_For : Trusted_Time := 0;
+      Parts      : Id_Vectors.Vector;
+   end record;
+
+   package Upload_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Upload,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
    type State is record
-      Root      : Unbounded_String;
-      Key       : Key_256;
-      Clock     : CG.Guard_State;
-      Started   : Boolean := False; --  clock baseline taken from the first tick
-      Op_Sealed : Boolean := False; --  operator-initiated read-only seal
-      Index     : Meta_Maps.Map;
-      Log       : Log_Vectors.Vector;
+      Root       : Unbounded_String;
+      Key        : Key_256;
+      Clock      : CG.Guard_State;
+      Started    : Boolean := False; --  clock baseline taken from the first tick
+      Op_Sealed  : Boolean := False; --  operator-initiated read-only seal
+      Index      : Meta_Maps.Map;
+      Log        : Log_Vectors.Vector;
+      Uploads    : Upload_Maps.Map;  --  in-flight multipart uploads (transient)
+      Upload_Seq : Natural := 0;
    end record;
 
    --  Writes are refused only by an operator seal (air-gap read-only). A clock
@@ -163,7 +182,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
             Put_Line (F, "OBJ " & Str_To_Hex (Name) & " " & String (M.Id)
                          & Lock_Mode'Pos (M.Lock.Mode)'Image
                          & M.Lock.Retain_Until'Image
-                         & M.Lock.Created_At'Image);
+                         & M.Lock.Created_At'Image
+                         & (if M.Composite then " 1" else " 0"));
          end;
       end loop;
       Put_Line (F, "AUDIT" & Natural'Image (Natural (V.Self.Log.Length)));
@@ -211,7 +231,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                      (Mode         =>
                         Lock_Mode'Val (Integer'Value (Field (Line, 4))),
                       Retain_Until => Trusted_Time'Value (Field (Line, 5)),
-                      Created_At   => Trusted_Time'Value (Field (Line, 6)))));
+                      Created_At   => Trusted_Time'Value (Field (Line, 6))),
+                   Composite => Field (Line, 7) = "1"));
             elsif Tag = "A" then
                V.Self.Log.Append
                  (Audit_Entry'
@@ -265,19 +286,153 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          Lock    : constant Retention_Lock :=
            Create_Lock (Mode, At_Time + Retain_For, At_Time);
       begin
-         V.Self.Index.Include (Name, (Id => Id, Lock => Lock));
+         V.Self.Index.Include (Name, (Id => Id, Lock => Lock, Composite => False));
          Add_Audit (V, Lock_Created, Name_Digest (Name), At_Time + Retain_For);
          Save (V);
       end;
    end Put_Object;
 
    function Get_Object (V : Vault_Type; Name : String) return Stream_Element_Array is
+      Root : constant String := To_String (V.Self.Root);
    begin
       if not V.Self.Index.Contains (Name) then
          raise Not_Found;
       end if;
-      return Get (To_String (V.Self.Root), V.Self.Key, V.Self.Index.Element (Name).Id);
+      declare
+         M : constant Meta := V.Self.Index.Element (Name);
+      begin
+         if not M.Composite then
+            return Get (Root, V.Self.Key, M.Id);
+         end if;
+         --  Composite: M.Id is a list of 64-char part ids; fetch and join them.
+         declare
+            List : constant Stream_Element_Array := Get (Root, V.Self.Key, M.Id);
+            N    : constant Natural := Natural (List'Length) / 64;
+            Acc  : Unbounded_String;
+         begin
+            for P in 0 .. N - 1 loop
+               declare
+                  Pid : Object_Id;
+               begin
+                  for I in 0 .. 63 loop
+                     Pid (Pid'First + I) :=
+                       Character'Val (Natural
+                         (List (List'First + Stream_Element_Offset (P * 64 + I))));
+                  end loop;
+                  declare
+                     Part : constant Stream_Element_Array :=
+                       Get (Root, V.Self.Key, Pid);
+                  begin
+                     for B in Part'Range loop
+                        Append (Acc, Character'Val (Natural (Part (B))));
+                     end loop;
+                  end;
+               end;
+            end loop;
+            declare
+               R : Stream_Element_Array (1 .. Stream_Element_Offset (Length (Acc)));
+            begin
+               for I in 1 .. Length (Acc) loop
+                  R (Stream_Element_Offset (I)) :=
+                    Stream_Element (Character'Pos (Element (Acc, I)));
+               end loop;
+               return R;
+            end;
+         end;
+      end;
    end Get_Object;
+
+   function Create_Upload
+     (V          : in out Vault_Type;
+      Name       : String;
+      Mode       : Lock_Mode;
+      Retain_For : Trusted_Time) return String
+   is
+   begin
+      if Read_Only (V) then
+         raise Vault_Sealed;
+      end if;
+      if Mode = Unlocked then
+         raise Invalid_Mode;
+      end if;
+      V.Self.Upload_Seq := V.Self.Upload_Seq + 1;
+      declare
+         Id : constant String :=
+           "upload-" & Trim (V.Self.Upload_Seq'Image, Ada.Strings.Both);
+      begin
+         V.Self.Uploads.Include
+           (Id, (Name       => To_Unbounded_String (Name),
+                 Mode       => Mode,
+                 Retain_For => Retain_For,
+                 Parts      => Id_Vectors.Empty_Vector));
+         return Id;
+      end;
+   end Create_Upload;
+
+   procedure Upload_Part
+     (V : in out Vault_Type; Upload_Id : String; Data : Stream_Element_Array)
+   is
+   begin
+      if Read_Only (V) then
+         raise Vault_Sealed;
+      end if;
+      if not V.Self.Uploads.Contains (Upload_Id) then
+         raise No_Such_Upload;
+      end if;
+      declare
+         U   : Upload := V.Self.Uploads.Element (Upload_Id);
+         Pid : constant Object_Id :=
+           Put (To_String (V.Self.Root), V.Self.Key, Data);
+      begin
+         U.Parts.Append (Pid);
+         V.Self.Uploads.Replace (Upload_Id, U);
+      end;
+   end Upload_Part;
+
+   procedure Complete_Upload (V : in out Vault_Type; Upload_Id : String) is
+   begin
+      if Read_Only (V) then
+         raise Vault_Sealed;
+      end if;
+      if not V.Self.Uploads.Contains (Upload_Id) then
+         raise No_Such_Upload;
+      end if;
+      declare
+         U       : constant Upload := V.Self.Uploads.Element (Upload_Id);
+         Name    : constant String := To_String (U.Name);
+         At_Time : constant Trusted_Time := CG.Now (V.Self.Clock);
+         List    : Stream_Element_Array
+                     (1 .. Stream_Element_Offset (Natural (U.Parts.Length) * 64));
+         Pos     : Stream_Element_Offset := 1;
+      begin
+         for P of U.Parts loop
+            for I in 1 .. 64 loop
+               List (Pos) := Stream_Element (Character'Pos (P (P'First + I - 1)));
+               Pos := Pos + 1;
+            end loop;
+         end loop;
+         declare
+            List_Id : constant Object_Id :=
+              Put (To_String (V.Self.Root), V.Self.Key, List);
+            Lock    : constant Retention_Lock :=
+              Create_Lock (U.Mode, At_Time + U.Retain_For, At_Time);
+         begin
+            V.Self.Index.Include
+              (Name, (Id => List_Id, Lock => Lock, Composite => True));
+            Add_Audit (V, Lock_Created, Name_Digest (Name),
+                       At_Time + U.Retain_For);
+         end;
+         V.Self.Uploads.Delete (Upload_Id);
+         Save (V);
+      end;
+   end Complete_Upload;
+
+   procedure Abort_Upload (V : in out Vault_Type; Upload_Id : String) is
+   begin
+      if V.Self.Uploads.Contains (Upload_Id) then
+         V.Self.Uploads.Delete (Upload_Id);
+      end if;
+   end Abort_Upload;
 
    function Contains (V : Vault_Type; Name : String) return Boolean is
      (V.Self.Index.Contains (Name));

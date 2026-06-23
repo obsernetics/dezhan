@@ -211,6 +211,24 @@ procedure Dezhan_Server is
       end;
    end Field_After;
 
+   --  Value of "Key=..." in a query string, up to '&' or end.
+   function Q_Val (Q, K : String) return String is
+      I : constant Natural := Index (Q, K);
+   begin
+      if I = 0 then
+         return "";
+      end if;
+      declare
+         From : constant Natural := I + K'Length;
+         J    : Natural := From;
+      begin
+         while J <= Q'Last and then Q (J) /= '&' loop
+            J := J + 1;
+         end loop;
+         return Q (From .. J - 1);
+      end;
+   end Q_Val;
+
    --  Verify a SigV4 Authorization header against the request and the demo
    --  credential. Anonymous is allowed unless DEZHAN_REQUIRE_AUTH is set.
    function Check_Auth
@@ -353,22 +371,45 @@ procedure Dezhan_Server is
 
          elsif Path'Length > 3 and then Path (Path'First .. Path'First + 2) = "/v/" then
             declare
-               Name : constant String := Path (Path'First + 3 .. Path'Last);
+               Raw   : constant String := Path (Path'First + 3 .. Path'Last);
+               QPos  : constant Natural := Index (Raw, "?");
+               Name  : constant String :=
+                 (if QPos = 0 then Raw else Raw (Raw'First .. QPos - 1));
+               Query : constant String :=
+                 (if QPos = 0 then "" else Raw (QPos + 1 .. Raw'Last));
+               Mode  : constant Lock_Mode :=
+                 (if Header (Head, "X-Dezhan-Mode") = "governance"
+                  then Governance else Compliance);
+               Retain : constant Trusted_Time :=
+                 (if Header (Head, "X-Dezhan-Retain") = "" then 3600
+                  else Trusted_Time'Value (Header (Head, "X-Dezhan-Retain")));
             begin
-               if Method = "PUT" then
+               if Query = "uploads" and then Method = "POST" then
+                  Send_Text (Ch, "200 OK", Create_Upload (V, Name, Mode, Retain));
+
+               elsif Q_Val (Query, "uploadId=") /= "" then
                   declare
-                     Mode_Str : constant String := Header (Head, "X-Dezhan-Mode");
-                     Mode     : constant Lock_Mode :=
-                       (if Mode_Str = "governance" then Governance else Compliance);
-                     Retain   : constant Trusted_Time :=
-                       (if Header (Head, "X-Dezhan-Retain") = "" then 3600
-                        else Trusted_Time'Value (Header (Head, "X-Dezhan-Retain")));
+                     Uid : constant String := Q_Val (Query, "uploadId=");
                   begin
-                     Put_Object (V, Name, Body_Bytes, Mode, Retain);
-                     Send_Text (Ch, "200 OK",
-                       "stored " & Name & " mode=" & Mode'Image
-                       & " retain=" & Trusted_Time'Image (Retain));
+                     if Method = "PUT" then
+                        Upload_Part (V, Uid, Body_Bytes);
+                        Send_Text (Ch, "200 OK", "part accepted");
+                     elsif Method = "POST" then
+                        Complete_Upload (V, Uid);
+                        Send_Text (Ch, "200 OK", "completed " & Name);
+                     elsif Method = "DELETE" then
+                        Abort_Upload (V, Uid);
+                        Send_Text (Ch, "200 OK", "aborted " & Uid);
+                     else
+                        Send_Text (Ch, "405 Method Not Allowed", "");
+                     end if;
                   end;
+
+               elsif Method = "PUT" then
+                  Put_Object (V, Name, Body_Bytes, Mode, Retain);
+                  Send_Text (Ch, "200 OK",
+                    "stored " & Name & " mode=" & Mode'Image
+                    & " retain=" & Trusted_Time'Image (Retain));
 
                elsif Method = "GET" then
                   if Contains (V, Name) then
@@ -412,6 +453,8 @@ procedure Dezhan_Server is
                        "vault is sealed (read-only)");
          when Not_Found =>
             Send_Text (Ch, "404 Not Found", "no such object");
+         when No_Such_Upload =>
+            Send_Text (Ch, "404 Not Found", "no such upload");
       end;
    end Handle;
 

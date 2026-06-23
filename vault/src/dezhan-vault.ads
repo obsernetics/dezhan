@@ -19,9 +19,10 @@ package Dezhan.Vault with SPARK_Mode => Off is
 
    type Vault_Type is limited private;
 
-   Not_Found     : exception;
-   Invalid_Mode  : exception;
-   Vault_Sealed  : exception;   --  raised by mutations while the vault is sealed
+   Not_Found       : exception;
+   Invalid_Mode    : exception;
+   Vault_Sealed    : exception; --  raised by mutations while the vault is sealed
+   No_Such_Upload  : exception;
 
    --  Open (or create) a vault rooted at Root, encrypted under Key.
    procedure Open (V : out Vault_Type; Root : String; Key : Key_256);
@@ -36,6 +37,22 @@ package Dezhan.Vault with SPARK_Mode => Off is
       Retain_For : Trusted_Time);
 
    function Get_Object (V : Vault_Type; Name : String) return Stream_Element_Array;
+
+   --  Multipart upload (S3-style): begin an upload, append parts in order, then
+   --  complete to store the object as a composite of its parts (which removes
+   --  the single-manifest size limit), or abort. Parts and the completed object
+   --  are encrypted at source like any object.
+   function Create_Upload
+     (V          : in out Vault_Type;
+      Name       : String;
+      Mode       : Lock_Mode;
+      Retain_For : Trusted_Time) return String;
+
+   procedure Upload_Part
+     (V : in out Vault_Type; Upload_Id : String; Data : Stream_Element_Array);
+
+   procedure Complete_Upload (V : in out Vault_Type; Upload_Id : String);
+   procedure Abort_Upload    (V : in out Vault_Type; Upload_Id : String);
 
    function Contains (V : Vault_Type; Name : String) return Boolean;
    function Object_Count (V : Vault_Type) return Natural;

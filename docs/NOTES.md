@@ -52,7 +52,18 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   Still to do: content-defined chunking, multi-level manifests for large objects
   (a single object is currently capped near 1 MB), compression, a background
   garbage collection of unreferenced chunks (a deleted object's chunks are
-  currently orphaned, not reclaimed).
+  currently orphaned, not reclaimed). Large objects are supported via multipart
+  composite objects (below), so the ~1 MB single-Put manifest cap is no longer a
+  hard limit; a native multi-level manifest for single Puts is still nice to have.
+- Multipart upload is implemented: `Vault.Create_Upload/Upload_Part/
+  Complete_Upload/Abort_Upload` store parts as individual encrypted objects and
+  complete into a composite object (its id points to the ordered list of part
+  ids; Get reassembles them), which removes the single-object size cap. The
+  server exposes it S3-style: `POST /v/<name>?uploads`, `PUT
+  /v/<name>?uploadId=<id>`, `POST /v/<name>?uploadId=<id>` to complete, `DELETE`
+  to abort. Vault logic is unit-tested; the HTTP routes are build-verified.
+  Remaining: S3-exact part numbers/ETags, and query-string SigV4 canonicalization
+  for signed multipart requests.
 - Background scrubbing is implemented: `Vault.Scrub` verifies every object's
   manifest and chunks against their digests; the server runs it during idle
   periods and exposes `POST /admin/scrub` plus `dezhan_scrub_*` metrics. Still to

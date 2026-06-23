@@ -162,6 +162,21 @@ begin
              "retention survives reopen (still locked)");
    end;
 
+   --  Multipart upload: parts are stored, then completed into a composite object
+   --  that reassembles to the concatenation of the parts.
+   declare
+      U : constant String :=
+        Create_Upload (V, "doc-mp", Compliance, Retain_For => 100_000);
+   begin
+      Upload_Part (V, U, Bytes ("AAAA"));
+      Upload_Part (V, U, Bytes ("BBBB"));
+      Upload_Part (V, U, Bytes ("CCCC"));
+      Complete_Upload (V, U);
+      Check (Contains (V, "doc-mp"), "multipart object stored");
+      Check (Equal (Get_Object (V, "doc-mp"), Bytes ("AAAABBBBCCCC")),
+             "multipart parts reassemble in order");
+   end;
+
    --  Background scrubbing: a clean sweep reports all objects intact; after a
    --  chunk is corrupted on disk, the scrub detects it.
    declare
