@@ -6,9 +6,12 @@ with Ada.Text_IO;                       use Ada.Text_IO;
 with Ada.Directories;                   use Ada.Directories;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Vectors;
+with Interfaces;                        use Interfaces;
 with Dezhan.Trusted_Core.Hashing;       use Dezhan.Trusted_Core.Hashing;
+with Dezhan.Trusted_Core.HMAC;          use Dezhan.Trusted_Core.HMAC;
 with Dezhan.Trusted_Core.Clock_Guard;
 with Dezhan.Trusted_Core.Audit;         use Dezhan.Trusted_Core.Audit;
+with Dezhan.Trusted_Core.Ed25519;
 with Dezhan.Storage.Cas;                use Dezhan.Storage.Cas;
 with Dezhan.Platform.Clock;
 with Dezhan.Platform.Sync;
@@ -779,5 +782,91 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       end loop;
       return Verify_Chain (C);
    end Audit_Verifies;
+
+   --  Ed25519 checkpoint key, derived from the vault key (key separation) so
+   --  there is no extra secret to manage; the public part is publishable.
+   function Checkpoint_Seed (V : Vault_Type) return Dezhan.Trusted_Core.Ed25519.Key_32
+   is
+      Lbl : constant String := "dezhan/checkpoint/ed25519";
+      KB  : Byte_Array (0 .. 31);
+      LB  : Byte_Array (0 .. Lbl'Length - 1);
+      H   : Digest;
+      R   : Dezhan.Trusted_Core.Ed25519.Key_32;
+   begin
+      for I in 0 .. 31 loop
+         KB (I) := V.Self.Key (I);
+      end loop;
+      for I in 0 .. Lbl'Length - 1 loop
+         LB (I) := Byte (Character'Pos (Lbl (Lbl'First + I)));
+      end loop;
+      H := HMAC_SHA256 (KB, LB);
+      for I in 0 .. 31 loop
+         R (I) := H (I);
+      end loop;
+      return R;
+   end Checkpoint_Seed;
+
+   --  Lowercase hex of an arbitrary byte sequence.
+   function Hex_Bytes (B : Byte_Array) return String is
+      Digits_Hex : constant String := "0123456789abcdef";
+      R : String (1 .. B'Length * 2);
+   begin
+      for I in 0 .. B'Length - 1 loop
+         R (I * 2 + 1) := Digits_Hex (Integer (B (B'First + I)) / 16 + 1);
+         R (I * 2 + 2) := Digits_Hex (Integer (B (B'First + I)) mod 16 + 1);
+      end loop;
+      return R;
+   end Hex_Bytes;
+
+   --  Checkpoint payload: 8-byte big-endian head sequence, then the head hash.
+   function Head_Payload (Seq : Natural; Head : Digest) return Byte_Array is
+      R : Byte_Array (0 .. 39) := (others => 0);
+   begin
+      for I in 0 .. 7 loop
+         R (I) := Byte (Shift_Right (Unsigned_64 (Seq), 8 * (7 - I)) and 16#FF#);
+      end loop;
+      for I in 0 .. 31 loop
+         R (8 + I) := Head (I);
+      end loop;
+      return R;
+   end Head_Payload;
+
+   function Checkpoint_Public_Key (V : Vault_Type) return String is
+      use Dezhan.Trusted_Core.Ed25519;
+      Pub : constant Key_32 := Public_Key (Checkpoint_Seed (V));
+      B   : Byte_Array (0 .. 31);
+   begin
+      for I in 0 .. 31 loop
+         B (I) := Pub (I);
+      end loop;
+      return Hex_Bytes (B);
+   end Checkpoint_Public_Key;
+
+   procedure Make_Checkpoint (V : Vault_Type) is
+      use Dezhan.Trusted_Core.Ed25519;
+      Last    : constant Audit_Entry := V.Self.Log.Last_Element;
+      Seed    : constant Key_32      := Checkpoint_Seed (V);
+      Pub     : constant Key_32      := Public_Key (Seed);
+      Payload : constant Byte_Array  := Head_Payload (Last.Seq, Last.Hash);
+      Sig     : constant Sig_64      := Sign (Seed, Payload);
+      Pub_B   : Byte_Array (0 .. 31);
+      Sig_B   : Byte_Array (0 .. 63);
+      Path    : constant String := Compose (To_String (V.Self.Root), "vault.checkpoint");
+      Tmp     : constant String := Path & ".tmp";
+      F       : File_Type;
+   begin
+      for I in 0 .. 31 loop
+         Pub_B (I) := Pub (I);
+      end loop;
+      for I in 0 .. 63 loop
+         Sig_B (I) := Sig (I);
+      end loop;
+      Create (F, Out_File, Tmp);
+      Put_Line (F, "CKPT" & Last.Seq'Image & " " & To_Hex (Last.Hash)
+                   & " " & Hex_Bytes (Pub_B) & " " & Hex_Bytes (Sig_B));
+      Close (F);
+      Sync.Fsync (Tmp);
+      Sync.Durable_Rename (Tmp, Path, To_String (V.Self.Root));
+   end Make_Checkpoint;
 
 end Dezhan.Vault;

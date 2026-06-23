@@ -707,6 +707,14 @@ procedure Dezhan_Server is
             Seal (V);
             Send_Text (Ch, "200 OK", "vault sealed (read-only)");
 
+         elsif Method = "POST" and then Path = "/admin/checkpoint" then
+            Make_Checkpoint (V);
+            Send_Text (Ch, "200 OK",
+              "checkpoint signed; public_key=" & Checkpoint_Public_Key (V));
+
+         elsif Method = "GET" and then Path = "/admin/checkpoint-key" then
+            Send_Text (Ch, "200 OK", Checkpoint_Public_Key (V));
+
          elsif Method = "POST" and then Path0 = "/admin/scrub" then
             Last_Scrub := Scrub (V);
             Scrub_Runs := Scrub_Runs + 1;

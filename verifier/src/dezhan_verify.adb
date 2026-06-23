@@ -5,6 +5,7 @@ pragma Ada_2022;
 --  Verify_Chain. It shares no code with the vault's writer, so it confirms the
 --  chain's tamper-evidence from the outside: a flipped field, a forged hash, or
 --  a re-linked entry all fail. Exit status is 0 on a valid chain, 1 otherwise.
+with Interfaces;                  use Interfaces;
 with Ada.Text_IO;                 use Ada.Text_IO;
 with Ada.Command_Line;            use Ada.Command_Line;
 with Ada.Directories;
@@ -12,6 +13,7 @@ with Ada.Containers.Vectors;
 with Dezhan.Trusted_Core.Times;   use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Hashing; use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Trusted_Core.Audit;   use Dezhan.Trusted_Core.Audit;
+with Dezhan.Trusted_Core.Ed25519; use Dezhan.Trusted_Core.Ed25519;
 
 procedure Dezhan_Verify is
 
@@ -59,6 +61,43 @@ procedure Dezhan_Verify is
       end loop;
       return D;
    end From_Hex;
+
+   function Pub_Of (S : String) return Key_32 is
+      R : Key_32 := (others => 0);
+   begin
+      if S'Length >= 64 then
+         for I in 0 .. 31 loop
+            R (I) := Byte (Nibble (S (S'First + I * 2)) * 16
+                           + Nibble (S (S'First + I * 2 + 1)));
+         end loop;
+      end if;
+      return R;
+   end Pub_Of;
+
+   function Sig_Of (S : String) return Sig_64 is
+      R : Sig_64 := (others => 0);
+   begin
+      if S'Length >= 128 then
+         for I in 0 .. 63 loop
+            R (I) := Byte (Nibble (S (S'First + I * 2)) * 16
+                           + Nibble (S (S'First + I * 2 + 1)));
+         end loop;
+      end if;
+      return R;
+   end Sig_Of;
+
+   --  Checkpoint payload: 8-byte big-endian seq, then the head hash.
+   function Ckpt_Payload (Seq : Natural; Head : Digest) return Byte_Array is
+      R : Byte_Array (0 .. 39) := (others => 0);
+   begin
+      for I in 0 .. 7 loop
+         R (I) := Byte (Shift_Right (Unsigned_64 (Seq), 8 * (7 - I)) and 16#FF#);
+      end loop;
+      for I in 0 .. 31 loop
+         R (8 + I) := Head (I);
+      end loop;
+      return R;
+   end Ckpt_Payload;
 
    package Entry_Vec is new Ada.Containers.Vectors (Natural, Audit_Entry);
 
@@ -125,6 +164,51 @@ begin
             else
                Put_Line ("audit chain FAILED: tamper or corruption detected");
                Set_Exit_Status (Failure);
+               return;
+            end if;
+         end;
+
+         --  Verify a signed checkpoint, if present: the Ed25519 signature must
+         --  cover the actual (verified) head at the checkpoint's sequence.
+         declare
+            CPath : constant String :=
+              Ada.Directories.Compose (Root, "vault.checkpoint");
+            CF    : File_Type;
+         begin
+            if Ada.Directories.Exists (CPath) then
+               Open (CF, In_File, CPath);
+               declare
+                  Line : constant String := (if End_Of_File (CF) then "" else Get_Line (CF));
+               begin
+                  Close (CF);
+                  if Field (Line, 1) = "CKPT" then
+                     declare
+                        Seq : constant Natural := Natural'Value (Field (Line, 2));
+                        Pub : constant Key_32  := Pub_Of (Field (Line, 4));
+                        Sig : constant Sig_64  := Sig_Of (Field (Line, 5));
+                        Found : Boolean := False;
+                        Head  : Digest;
+                     begin
+                        for I in 0 .. N - 1 loop
+                           if Items (I).Seq = Seq then
+                              Head := Items (I).Hash;
+                              Found := True;
+                           end if;
+                        end loop;
+                        if not Found then
+                           Put_Line ("checkpoint FAILED: head seq" & Seq'Image
+                                     & " not in chain");
+                           Set_Exit_Status (Failure);
+                        elsif Verify (Pub, Ckpt_Payload (Seq, Head), Sig) then
+                           Put_Line ("checkpoint OK: head seq" & Seq'Image
+                                     & " signed by " & Field (Line, 4));
+                        else
+                           Put_Line ("checkpoint FAILED: bad signature");
+                           Set_Exit_Status (Failure);
+                        end if;
+                     end;
+                  end if;
+               end;
             end if;
          end;
       end;

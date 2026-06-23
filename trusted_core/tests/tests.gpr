@@ -8,7 +8,8 @@ project Tests is
    for Main use
      ("test_retention.adb", "test_clock_guard.adb",
       "test_hashing.adb", "test_audit.adb", "test_erasure.adb",
-      "test_cipher.adb", "test_hmac.adb");
+      "test_cipher.adb", "test_hmac.adb", "test_sha512.adb",
+      "test_ed25519.adb");
 
    package Compiler is
       for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-gnata", "-g");

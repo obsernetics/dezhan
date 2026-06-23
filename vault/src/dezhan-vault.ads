@@ -150,6 +150,15 @@ package Dezhan.Vault with SPARK_Mode => Off is
    function Audit_Length   (V : Vault_Type) return Natural;
    function Audit_Verifies (V : Vault_Type) return Boolean;
 
+   --  Sign a checkpoint over the current audit head (its seq and hash) with the
+   --  vault's Ed25519 checkpoint key and write it durably to
+   --  <root>/vault.checkpoint. An auditor who knows the public key can then
+   --  confirm, out of band, that the persisted chain head is authentic.
+   procedure Make_Checkpoint (V : Vault_Type);
+
+   --  Hex of the Ed25519 public key used to sign checkpoints (publish once).
+   function Checkpoint_Public_Key (V : Vault_Type) return String;
+
 private
 
    type State;
