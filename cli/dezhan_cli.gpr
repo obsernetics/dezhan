@@ -1,3 +1,5 @@
+with "../auth/dezhan_sigv4.gpr";
+
 project Dezhan_Cli is
 
    for Source_Dirs use ("src");

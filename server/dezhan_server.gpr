@@ -1,4 +1,5 @@
 with "../vault/dezhan_vault.gpr";
+with "../auth/dezhan_sigv4.gpr";
 
 project Dezhan_Server is
 

@@ -20,11 +20,13 @@ with Ada.Strings.Maps.Constants;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Streams;          use Ada.Streams;
 with Ada.Exceptions;       use Ada.Exceptions;
+with Ada.Environment_Variables;
 with GNAT.Sockets;         use GNAT.Sockets;
 with Dezhan.Trusted_Core.Times;     use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Retention; use Dezhan.Trusted_Core.Retention;
 with Dezhan.Trusted_Core.Cipher;    use Dezhan.Trusted_Core.Cipher;
 with Dezhan.Vault;                  use Dezhan.Vault;
+with Dezhan.Sigv4;
 
 procedure Dezhan_Server is
 
@@ -37,6 +39,18 @@ procedure Dezhan_Server is
 
    --  Fixed demo key. Real key management is future work (docs/NOTES.md).
    Key : constant Key_256 := (others => 42);
+
+   function Env (Name, Default : String) return String is
+     (if Ada.Environment_Variables.Exists (Name)
+      then Ada.Environment_Variables.Value (Name) else Default);
+
+   --  SigV4 credential (single demo account) and whether unsigned requests to
+   --  /v are rejected. Real multi-account credential management is future work.
+   Access_Key   : constant String  := Env ("DEZHAN_ACCESS_KEY", "dezhanadmin");
+   Secret_Key   : constant String  := Env ("DEZHAN_SECRET", "dezhandemosecretkey0123456789");
+   Require_Auth : constant Boolean  := Ada.Environment_Variables.Exists ("DEZHAN_REQUIRE_AUTH");
+
+   type Auth_Status is (Anon, Valid, Invalid, Missing);
 
    V : Vault_Type;
 
@@ -157,6 +171,93 @@ procedure Dezhan_Server is
       Send (Ch, Status, "text/plain", To_SEA (Text));
    end Send_Text;
 
+   --  N-th Sep-separated field of S ("" if absent).
+   function Part (S : String; Sep : Character; N : Positive) return String is
+      Count : Natural := 0;
+      Start : Natural := S'First;
+      I     : Natural := S'First;
+   begin
+      while I <= S'Last loop
+         if S (I) = Sep then
+            Count := Count + 1;
+            if Count = N then
+               return S (Start .. I - 1);
+            end if;
+            Start := I + 1;
+         end if;
+         I := I + 1;
+      end loop;
+      if Count + 1 = N then
+         return S (Start .. S'Last);
+      end if;
+      return "";
+   end Part;
+
+   --  Value of "Key=..." in an Authorization header, up to the next comma.
+   function Field_After (S, K : String) return String is
+      I : constant Natural := Index (S, K);
+   begin
+      if I = 0 then
+         return "";
+      end if;
+      declare
+         From : constant Natural := I + K'Length;
+         J    : Natural := From;
+      begin
+         while J <= S'Last and then S (J) /= ',' loop
+            J := J + 1;
+         end loop;
+         return Trim (S (From .. J - 1), Both);
+      end;
+   end Field_After;
+
+   --  Verify a SigV4 Authorization header against the request and the demo
+   --  credential. Anonymous is allowed unless DEZHAN_REQUIRE_AUTH is set.
+   function Check_Auth
+     (Head, Method, Path, Payload_Hash : String) return Auth_Status
+   is
+      A : constant String := Header (Head, "Authorization");
+   begin
+      if A = "" then
+         return (if Require_Auth then Missing else Anon);
+      end if;
+      if Index (A, "AWS4-HMAC-SHA256") = 0 then
+         return Invalid;
+      end if;
+      declare
+         Cred    : constant String := Field_After (A, "Credential=");
+         SH      : constant String := Field_After (A, "SignedHeaders=");
+         Sig     : constant String := Field_After (A, "Signature=");
+         AKID    : constant String := Part (Cred, '/', 1);
+         SDate   : constant String := Part (Cred, '/', 2);
+         Region  : constant String := Part (Cred, '/', 3);
+         Service : constant String := Part (Cred, '/', 4);
+         CH      : Unbounded_String;
+         N       : Natural := 1;
+      begin
+         if AKID /= Access_Key then
+            return Invalid;
+         end if;
+         loop
+            declare
+               Name : constant String := Part (SH, ';', N);
+            begin
+               exit when Name = "";
+               Append (CH, Name & ":" & Header (Head, Name) & ASCII.LF);
+               N := N + 1;
+            end;
+         end loop;
+         if Dezhan.Sigv4.Signature_For
+              (Secret_Key, Method, Path, "", To_String (CH), SH, Payload_Hash,
+               Header (Head, "x-amz-date"), SDate, Region, Service) = Sig
+         then
+            return Valid;
+         else
+            return Invalid;
+         end if;
+      end;
+   end Check_Auth;
+
    procedure Handle (Ch : Stream_Access) is
       Head : constant String := Read_Head (Ch);
       SP1  : constant Natural := Index (Head, " ");
@@ -180,6 +281,29 @@ procedure Dezhan_Server is
 
          --  Keep trusted time current from the real system clock.
          Tick_From_System (V);
+
+         --  Authenticate data-plane (/v) requests via SigV4 when present.
+         if Path = "/v"
+           or else (Path'Length >= 3
+                    and then Path (Path'First .. Path'First + 2) = "/v/")
+         then
+            declare
+               Payload_Hash : constant String :=
+                 (if Header (Head, "x-amz-content-sha256") /= ""
+                  then Header (Head, "x-amz-content-sha256")
+                  else Dezhan.Sigv4.Hex_SHA256 (""));
+               St : constant Auth_Status :=
+                 Check_Auth (Head, Method, Path, Payload_Hash);
+            begin
+               if St = Missing then
+                  Send_Text (Ch, "401 Unauthorized", "authentication required");
+                  return;
+               elsif St = Invalid then
+                  Send_Text (Ch, "403 Forbidden", "invalid SigV4 signature");
+                  return;
+               end if;
+            end;
+         end if;
 
          if Method = "GET" and then Path = "/" then
             Send (Ch, "200 OK", "text/html", To_SEA (Index_Html));

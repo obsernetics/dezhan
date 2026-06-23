@@ -5,10 +5,25 @@
 --  job. Regular Ada (string handling); the cryptography underneath is verified.
 package Dezhan.Sigv4 with SPARK_Mode => Off is
 
-   --  Lowercase hex of a 32-byte digest (64 chars).
-   --  The SigV4 four-step signing key: HMAC chain over date, region, service,
-   --  and the "aws4_request" terminator, keyed initially by "AWS4"+secret.
+   --  Final SigV4 signature from a fully formed string-to-sign. The signing key
+   --  is the four-step HMAC chain over date/region/service/aws4_request, keyed
+   --  initially by "AWS4"+secret. Validated against the AWS worked example.
    function Signature
      (Secret, Date, Region, Service, String_To_Sign : String) return String;
+
+   --  Lowercase hex of SHA-256 over Data (Data must fit the hash input bound).
+   function Hex_SHA256 (Data : String) return String;
+
+   --  Compute the expected SigV4 signature for a request. Builds the canonical
+   --  request and string-to-sign per AWS, then signs. The server compares the
+   --  result to the client's Signature; equality authenticates the request.
+   --    Canonical_Headers : "name:value\n" lines for the signed headers (sorted,
+   --                        lowercase names, trimmed values).
+   --    Signed_Headers    : "h1;h2;..." sorted lowercase names.
+   --    Payload_Hash      : hex SHA-256 of the body, or "UNSIGNED-PAYLOAD".
+   function Signature_For
+     (Secret, Method, Canonical_URI, Canonical_Query,
+      Canonical_Headers, Signed_Headers, Payload_Hash,
+      Amz_Date, Scope_Date, Region, Service : String) return String;
 
 end Dezhan.Sigv4;

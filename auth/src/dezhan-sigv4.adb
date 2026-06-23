@@ -33,6 +33,30 @@ package body Dezhan.Sigv4 with SPARK_Mode => Off is
       return R;
    end Hex;
 
+   LF : constant String := (1 => ASCII.LF);
+
+   function Hex_SHA256 (Data : String) return String is
+   begin
+      return Hex (SHA256 (To_Bytes (Data)));
+   end Hex_SHA256;
+
+   function Signature_For
+     (Secret, Method, Canonical_URI, Canonical_Query,
+      Canonical_Headers, Signed_Headers, Payload_Hash,
+      Amz_Date, Scope_Date, Region, Service : String) return String
+   is
+      Canonical_Request : constant String :=
+        Method & LF & Canonical_URI & LF & Canonical_Query & LF
+        & Canonical_Headers & LF & Signed_Headers & LF & Payload_Hash;
+      Scope : constant String :=
+        Scope_Date & "/" & Region & "/" & Service & "/aws4_request";
+      String_To_Sign : constant String :=
+        "AWS4-HMAC-SHA256" & LF & Amz_Date & LF & Scope & LF
+        & Hex_SHA256 (Canonical_Request);
+   begin
+      return Signature (Secret, Scope_Date, Region, Service, String_To_Sign);
+   end Signature_For;
+
    function Signature
      (Secret, Date, Region, Service, String_To_Sign : String) return String
    is

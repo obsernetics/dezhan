@@ -15,10 +15,18 @@ with Ada.Strings.Fixed;    use Ada.Strings.Fixed;
 with Ada.Environment_Variables;
 with Ada.Exceptions;       use Ada.Exceptions;
 with GNAT.Sockets;         use GNAT.Sockets;
+with Dezhan.Sigv4;
 
 procedure Dezhan_Cli is
 
    CRLF : constant String := ASCII.CR & ASCII.LF;
+   LF   : constant String := (1 => ASCII.LF);
+
+   --  Demo SigV4 credential (must match the server's).
+   AKID    : constant String := "dezhanadmin";
+   Secret  : constant String := "dezhandemosecretkey0123456789";
+   Region  : constant String := "us-east-1";
+   Service : constant String := "s3";
 
    function Env_Addr return String is
      (if Ada.Environment_Variables.Exists ("DEZHAN_ADDR")
@@ -107,6 +115,38 @@ begin
          begin
             Round_Trip (Req ("PUT", "/v/" & Argument (2), Headers, Argument (3)));
          end;
+      elsif Cmd = "sput" and then Argument_Count >= 3 then
+         --  SigV4-signed PUT (for servers started with DEZHAN_REQUIRE_AUTH).
+         declare
+            Name     : constant String := Argument (2);
+            Data     : constant String := Argument (3);
+            Path     : constant String := "/v/" & Name;
+            Amz_Date : constant String := "20250101T000000Z";
+            S_Date   : constant String := "20250101";
+            Pay_Hash : constant String := Dezhan.Sigv4.Hex_SHA256 (Data);
+            Signed   : constant String := "host;x-amz-content-sha256;x-amz-date";
+            Canon_H  : constant String :=
+              "host:dezhan" & LF
+              & "x-amz-content-sha256:" & Pay_Hash & LF
+              & "x-amz-date:" & Amz_Date & LF;
+            Sig      : constant String :=
+              Dezhan.Sigv4.Signature_For
+                (Secret, "PUT", Path, "", Canon_H, Signed, Pay_Hash,
+                 Amz_Date, S_Date, Region, Service);
+            Auth     : constant String :=
+              "AWS4-HMAC-SHA256 Credential=" & AKID & "/" & S_Date & "/"
+              & Region & "/" & Service & "/aws4_request, SignedHeaders="
+              & Signed & ", Signature=" & Sig;
+            Headers  : constant String :=
+              "x-amz-date: " & Amz_Date & CRLF
+              & "x-amz-content-sha256: " & Pay_Hash & CRLF
+              & "Authorization: " & Auth & CRLF
+              & "X-Dezhan-Mode: compliance" & CRLF
+              & "X-Dezhan-Retain: 3600" & CRLF;
+         begin
+            Round_Trip (Req ("PUT", Path, Headers, Data));
+         end;
+
       elsif Cmd = "del" and then Argument_Count >= 2 then
          declare
             Bypass : constant String :=

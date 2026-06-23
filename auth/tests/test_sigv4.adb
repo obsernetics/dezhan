@@ -41,6 +41,32 @@ begin
       Put_Line ("   got      " & Got);
    end if;
 
+   --  Hex_SHA256 of the empty string (NIST vector).
+   Check (Hex_SHA256 ("") =
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "Hex_SHA256 of empty string matches NIST");
+
+   --  Signature_For: deterministic, and tampering any input changes it.
+   declare
+      CH : constant String :=
+        "host:dezhan" & ASCII.LF & "x-amz-date:20150830T123600Z" & ASCII.LF;
+      S1 : constant String :=
+        Signature_For (Secret, "PUT", "/v/obj", "", CH, "host;x-amz-date",
+                       "UNSIGNED-PAYLOAD", "20150830T123600Z",
+                       "20150830", "us-east-1", "s3");
+      S2 : constant String :=
+        Signature_For (Secret, "PUT", "/v/obj", "", CH, "host;x-amz-date",
+                       "UNSIGNED-PAYLOAD", "20150830T123600Z",
+                       "20150830", "us-east-1", "s3");
+      S3 : constant String :=
+        Signature_For (Secret, "DELETE", "/v/obj", "", CH, "host;x-amz-date",
+                       "UNSIGNED-PAYLOAD", "20150830T123600Z",
+                       "20150830", "us-east-1", "s3");
+   begin
+      Check (S1 = S2, "Signature_For is deterministic");
+      Check (S1 /= S3, "changing the method changes the signature");
+   end;
+
    --  Determinism / self-consistency.
    Check (Signature (Secret, "20150830", "us-east-1", "iam", String_To_Sign) = Got,
           "signing is deterministic");
