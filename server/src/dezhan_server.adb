@@ -47,8 +47,11 @@ with Dezhan.Trusted_Core.Hashing;   use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Vault;                  use Dezhan.Vault;
 with Dezhan.Sigv4;
 with Dezhan.Kdf;                    use Dezhan.Kdf;
+with Dezhan.Keystore;              use Dezhan.Keystore;
 with Ada.Streams.Stream_IO;
 with Ada.Directories;
+with Interfaces;                   use Interfaces;
+with GNAT.OS_Lib;
 
 procedure Dezhan_Server is
 
@@ -68,49 +71,14 @@ procedure Dezhan_Server is
    KDF_Iters : constant Positive :=
      Positive'Value (Env ("DEZHAN_KDF_ITERS", "200000"));
 
-   --  Per-vault random salt for the KDF, kept in the clear at <root>/vault.salt
-   --  (a salt is not secret). Created on first start from /dev/urandom.
-   function Vault_Salt (Root : String) return Byte_Array is
-      package SIO renames Ada.Streams.Stream_IO;
-      package Dir renames Ada.Directories;
-      Path : constant String := Dir.Compose (Root, "vault.salt");
-      F    : SIO.File_Type;
-      SEA  : Stream_Element_Array (1 .. 16);
-      Last : Stream_Element_Offset;
-      R    : Byte_Array (0 .. 15);
-   begin
-      Dir.Create_Path (Root);
-      if not Dir.Exists (Path) then
-         declare
-            U : SIO.File_Type;
-         begin
-            SIO.Open (U, SIO.In_File, "/dev/urandom");
-            SIO.Read (U, SEA, Last);
-            SIO.Close (U);
-            SIO.Create (F, SIO.Out_File, Path);
-            SIO.Write (F, SEA (1 .. Last));
-            SIO.Close (F);
-         end;
-      end if;
-      SIO.Open (F, SIO.In_File, Path);
-      SIO.Read (F, SEA, Last);
-      SIO.Close (F);
-      for I in 0 .. Natural (Last) - 1 loop
-         R (I) := Byte (SEA (Stream_Element_Offset (I + 1)));
-      end loop;
-      return R (0 .. Natural (Last) - 1);
-   end Vault_Salt;
-
-   --  Vault data-encryption key, derived from a passphrase (DEZHAN_VAULT_KEY)
-   --  with PBKDF2-HMAC-SHA256 over the per-vault salt. The passphrase is first
-   --  folded to 32 bytes with SHA-256 so any length is accepted. Wrapping/escrow
-   --  of the derived key is the remaining key-management work.
-   function Derive_Key (Pass, Root : String) return Key_256 is
-      PB   : Byte_Array (0 .. Pass'Length - 1);
-      Salt : constant Byte_Array := Vault_Salt (Root);
-      PW   : Digest;
-      D    : Digest;
-      K    : Key_256;
+   --  Key-encryption key from the passphrase and salt (PBKDF2-HMAC-SHA256). The
+   --  passphrase is folded to 32 bytes with SHA-256 first so any length works.
+   function KEK_From (Pass : String; Salt : Byte_Array; Iters : Positive)
+                      return Key_256 is
+      PB : Byte_Array (0 .. Pass'Length - 1);
+      PW : Digest;
+      D  : Digest;
+      K  : Key_256;
    begin
       for I in 0 .. Pass'Length - 1 loop
          PB (I) := Byte (Character'Pos (Pass (Pass'First + I)));
@@ -122,16 +90,155 @@ procedure Dezhan_Server is
          for I in 0 .. 31 loop
             PWB (I) := PW (I);
          end loop;
-         D := PBKDF2_HMAC_SHA256 (PWB, Salt, KDF_Iters);
+         D := PBKDF2_HMAC_SHA256 (PWB, Salt, Iters);
       end;
       for I in 0 .. 31 loop
          K (I) := D (I);
       end loop;
       return K;
-   end Derive_Key;
+   end KEK_From;
+
+   function Random_Bytes (N : Positive) return Byte_Array is
+      package SIO renames Ada.Streams.Stream_IO;
+      U    : SIO.File_Type;
+      SEA  : Stream_Element_Array (1 .. Stream_Element_Offset (N));
+      Last : Stream_Element_Offset;
+      R    : Byte_Array (0 .. N - 1);
+   begin
+      SIO.Open (U, SIO.In_File, "/dev/urandom");
+      SIO.Read (U, SEA, Last);
+      SIO.Close (U);
+      for I in 0 .. N - 1 loop
+         R (I) := Byte (SEA (Stream_Element_Offset (I + 1)));
+      end loop;
+      return R;
+   end Random_Bytes;
+
+   Key_Path : constant String := Ada.Directories.Compose (Root, "vault.key");
+
+   --  Keystore file: salt(16) | iters(4 BE) | nonce(12) | wrapped DEK(32) |
+   --  tag(32) = 96 bytes. The salt and nonce are not secret; the DEK is wrapped.
+   procedure Write_Keystore (Salt : Byte_Array; Iters : Positive;
+                             W : Wrapped_Key) is
+      package SIO renames Ada.Streams.Stream_IO;
+      F   : SIO.File_Type;
+      Buf : Stream_Element_Array (1 .. 96);
+      P   : Stream_Element_Offset := 1;
+      procedure Put_B (B : Byte) is
+      begin
+         Buf (P) := Stream_Element (B);
+         P := P + 1;
+      end Put_B;
+   begin
+      for I in 0 .. 15 loop
+         Put_B (Salt (Salt'First + I));
+      end loop;
+      Put_B (Byte (Shift_Right (Unsigned_32 (Iters), 24) and 16#FF#));
+      Put_B (Byte (Shift_Right (Unsigned_32 (Iters), 16) and 16#FF#));
+      Put_B (Byte (Shift_Right (Unsigned_32 (Iters), 8)  and 16#FF#));
+      Put_B (Byte (Unsigned_32 (Iters) and 16#FF#));
+      for I in 0 .. 11 loop
+         Put_B (W.Nonce (I));
+      end loop;
+      for I in 0 .. 31 loop
+         Put_B (W.Cipher (I));
+      end loop;
+      for I in 0 .. 31 loop
+         Put_B (W.Tag (I));
+      end loop;
+      SIO.Create (F, SIO.Out_File, Key_Path);
+      SIO.Write (F, Buf);
+      SIO.Close (F);
+   end Write_Keystore;
+
+   --  Load the data-encryption key: unwrap it on an existing vault (refusing a
+   --  wrong passphrase), or generate and wrap a fresh random DEK on first run.
+   --  If DEZHAN_NEW_VAULT_KEY is set, re-wrap the same DEK under the new
+   --  passphrase (passphrase rotation: no data is re-encrypted).
+   function Load_Or_Init_Key (Root, Pass : String) return Key_256 is
+      package Dir renames Ada.Directories;
+      package SIO renames Ada.Streams.Stream_IO;
+   begin
+      Dir.Create_Path (Root);
+      if Dir.Exists (Key_Path) then
+         declare
+            F    : SIO.File_Type;
+            Buf  : Stream_Element_Array (1 .. 96);
+            Last : Stream_Element_Offset;
+            function Get_B (I : Natural) return Byte is
+              (Byte (Buf (Stream_Element_Offset (I + 1))));
+            Salt  : Byte_Array (0 .. 15);
+            Iters : Unsigned_32 := 0;
+            W     : Wrapped_Key;
+            DEK   : Key_256;
+            Ok    : Boolean;
+         begin
+            SIO.Open (F, SIO.In_File, Key_Path);
+            SIO.Read (F, Buf, Last);
+            SIO.Close (F);
+            for I in 0 .. 15 loop
+               Salt (I) := Get_B (I);
+            end loop;
+            for I in 16 .. 19 loop
+               Iters := Shift_Left (Iters, 8) or Unsigned_32 (Get_B (I));
+            end loop;
+            for I in 0 .. 11 loop
+               W.Nonce (I) := Get_B (20 + I);
+            end loop;
+            for I in 0 .. 31 loop
+               W.Cipher (I) := Get_B (32 + I);
+            end loop;
+            for I in 0 .. 31 loop
+               W.Tag (I) := Get_B (64 + I);
+            end loop;
+            Unwrap (KEK_From (Pass, Salt, Positive (Iters)), W, DEK, Ok);
+            if not Ok then
+               Put_Line ("fatal: wrong vault passphrase (DEZHAN_VAULT_KEY)");
+               GNAT.OS_Lib.OS_Exit (1);
+            end if;
+            if Ada.Environment_Variables.Exists ("DEZHAN_NEW_VAULT_KEY") then
+               declare
+                  NSalt : constant Byte_Array := Random_Bytes (16);
+                  NNonB : constant Byte_Array := Random_Bytes (12);
+                  NNon  : Nonce_96;
+               begin
+                  for I in 0 .. 11 loop
+                     NNon (I) := NNonB (I);
+                  end loop;
+                  Write_Keystore
+                    (NSalt, KDF_Iters,
+                     Wrap (KEK_From (Env ("DEZHAN_NEW_VAULT_KEY", ""),
+                                     NSalt, KDF_Iters),
+                           NNon, DEK));
+                  Put_Line ("vault key re-wrapped (passphrase rotated)");
+               end;
+            end if;
+            return DEK;
+         end;
+      else
+         declare
+            DEK_B : constant Byte_Array := Random_Bytes (32);
+            Salt  : constant Byte_Array := Random_Bytes (16);
+            NonB  : constant Byte_Array := Random_Bytes (12);
+            DEK   : Key_256;
+            Nonce : Nonce_96;
+         begin
+            for I in 0 .. 31 loop
+               DEK (I) := DEK_B (I);
+            end loop;
+            for I in 0 .. 11 loop
+               Nonce (I) := NonB (I);
+            end loop;
+            Write_Keystore
+              (Salt, KDF_Iters, Wrap (KEK_From (Pass, Salt, KDF_Iters),
+                                      Nonce, DEK));
+            return DEK;
+         end;
+      end if;
+   end Load_Or_Init_Key;
 
    Key : constant Key_256 :=
-     Derive_Key (Env ("DEZHAN_VAULT_KEY", "dezhan-demo-vault-key"), Root);
+     Load_Or_Init_Key (Root, Env ("DEZHAN_VAULT_KEY", "dezhan-demo-vault-key"));
 
    --  The seeded demo SigV4 account (more can be loaded from a credentials
    --  file), and whether unsigned requests to /v are rejected.
