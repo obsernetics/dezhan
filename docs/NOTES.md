@@ -76,15 +76,21 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   to abort. Vault logic is unit-tested; the HTTP routes are build-verified.
   Remaining: S3-exact part numbers/ETags, and query-string SigV4 canonicalization
   for signed multipart requests.
-- Background scrubbing is implemented: `Vault.Scrub` verifies every object's
-  manifest and chunks against their digests; the server runs it during idle
-  periods and exposes `POST /admin/scrub` plus `dezhan_scrub_*` metrics. Still to
-  do: scheduling policy/cadence and quarantining or auto-repairing detected
-  corruption (the latter needs erasure-coding integration).
+- Background scrubbing self-heals: `Vault.Scrub` verifies every object's
+  manifest and chunks against their digests and rebuilds any missing or corrupt
+  shard from parity in place (`Cas.Repair`), restoring full redundancy. Repair
+  rewrites bit-identical content-addressed bytes, so it preserves immutability
+  and is safe on a sealed vault. The server runs it during idle periods and on
+  `POST /admin/scrub`, and exposes `dezhan_scrub_*` metrics including
+  `dezhan_scrub_shards_repaired`. Still to do: scheduling policy/cadence, and
+  quarantine for objects that lost more than M shards (unrepairable).
 - Key management is not implemented: where the vault key comes from, rotation,
   per-object keys, and key wrapping are future work. The store takes a key from
-  the caller; tests use a fixed key and a zero nonce with a per-chunk counter
-  (a per-object random nonce is the intended hardening).
+  the caller. Each object is encrypted under a per-object nonce derived
+  convergently from its content and the key (`Derive_Nonce`), so the keystream is
+  never reused across distinct objects while identical content still deduplicates
+  and Put stays idempotent. Tradeoff: convergent encryption lets a party that
+  already knows a plaintext confirm whether it is stored.
 - Vault + HTTP API + CLI + web UI: implemented as an end-to-end POC
   (`Dezhan.Vault`, `dezhan_server`, `dezhan_cli`). WORM enforced, audit chain,
   health, Prometheus metrics, minimal UI. Durable persistence is implemented:

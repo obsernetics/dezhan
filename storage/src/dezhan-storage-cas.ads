@@ -46,6 +46,18 @@ package Dezhan.Storage.Cas with SPARK_Mode => Off is
    --  cipher-text integrity, so it needs no key.
    function Verify (Root : String; Id : Object_Id) return Boolean;
 
+   --  Outcome of repairing one object's redundancy.
+   type Repair_Result is record
+      Recoverable     : Boolean := True;  --  every blob still had >= K shards
+      Shards_Repaired : Natural := 0;     --  shard files rebuilt from parity
+   end record;
+
+   --  Rebuild any missing or corrupt shard of the manifest and each chunk from
+   --  the surviving shards, restoring full redundancy in place. Needs no key
+   --  (operates on cipher text). Recoverable is False if any blob lost more than
+   --  M shards (unrepairable); shards already intact are left untouched.
+   function Repair (Root : String; Id : Object_Id) return Repair_Result;
+
    --  A list of live object ids (manifest ids) to retain during collection.
    type Id_List is array (Positive range <>) of Object_Id;
 

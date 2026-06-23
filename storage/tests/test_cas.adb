@@ -42,12 +42,12 @@ procedure Test_Cas is
    --  are stored as objects/<2hex>/<64hex>/{1..6,idx}). Returns how many were
    --  removed. Two calls remove from the same chunk, so 2 then 2 more drops it
    --  below the K=4 recovery threshold.
-   function Delete_N_Shards (N : Positive) return Natural is
+   function Delete_N_Shards (R : String; N : Positive) return Natural is
       Deleted : Natural := 0;
       L1 : Search_Type;
       E1 : Directory_Entry_Type;
    begin
-      Start_Search (L1, Compose (Root, "objects"), "",
+      Start_Search (L1, Compose (R, "objects"), "",
                     (Directory => True, others => False));
       while More_Entries (L1) loop
          Get_Next_Entry (L1, E1);
@@ -129,14 +129,14 @@ begin
       Check (Put (Root, Key, Data) = Id, "same bytes and key yield the same id");
 
       --  Erasure coding: losing up to M=2 shards of a chunk is recoverable.
-      Check (Delete_N_Shards (2) = 2, "removed 2 of 6 shards from a chunk");
+      Check (Delete_N_Shards (Root, 2) = 2, "removed 2 of 6 shards from a chunk");
       Check (Verify (Root, Id),
              "erasure recovers: object intact after losing 2 shards");
       Check (Equal (Get (Root, Key, Id), Data),
              "object reassembles from parity after losing 2 shards");
 
       --  Losing more than M shards of a chunk is unrecoverable and detected.
-      Check (Delete_N_Shards (2) = 2, "removed 2 more shards (4 of 6 gone)");
+      Check (Delete_N_Shards (Root, 2) = 2, "removed 2 more shards (4 of 6 gone)");
       Check (not Verify (Root, Id),
              "verify detects unrecoverable loss (> M shards)");
    end;
@@ -161,6 +161,40 @@ begin
          Check (Equal (Get (Root, Key, Id2), Small),
                 "manifest recovered from parity after losing 2 shards");
       end;
+   end;
+
+   --  Auto-repair (self-heal): a degraded-but-recoverable chunk is rebuilt in
+   --  place from parity, fully restoring redundancy. Uses a fresh root with a
+   --  single-chunk object so the shard layout is deterministic.
+   declare
+      R2  : constant String := "/tmp/dezhan_cas_repair_test";
+      Obj : Stream_Element_Array (1 .. 3000);   --  one chunk, K=3 + 2 parity
+      Id3 : Object_Id;
+      Lc  : Unsigned_32 := 16#0BAD_C0DE#;
+   begin
+      if Exists (R2) then
+         Delete_Tree (R2);
+      end if;
+      Initialize (R2);
+      for I in Obj'Range loop                   --  incompressible, stays uncompressed
+         Lc := Lc * 1_103_515_245 + 12_345;
+         Obj (I) := Stream_Element (Shift_Right (Lc, 16) and 16#FF#);
+      end loop;
+      Id3 := Put (R2, Key, Obj);
+
+      Check (Delete_N_Shards (R2, 2) = 2, "removed 2 shards from the chunk");
+      declare
+         Res : constant Repair_Result := Repair (R2, Id3);
+      begin
+         Check (Res.Recoverable and then Res.Shards_Repaired >= 2,
+                "repair rebuilds the missing shards from parity");
+      end;
+      Check (Equal (Get (R2, Key, Id3), Obj), "object reads correctly after repair");
+
+      --  Redundancy is genuinely restored: a second 2-shard loss still recovers.
+      Check (Delete_N_Shards (R2, 2) = 2, "removed 2 more shards after repair");
+      Check (Equal (Get (R2, Key, Id3), Obj),
+             "self-heal restored redundancy (survives a second 2-shard loss)");
    end;
 
    --  Empty object round-trips.

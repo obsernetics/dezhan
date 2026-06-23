@@ -476,15 +476,24 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    end Object_Names;
 
    function Scrub (V : Vault_Type) return Scrub_Report is
-      R : Scrub_Report;
+      R    : Scrub_Report;
+      Root : constant String := To_String (V.Self.Root);
    begin
       for Cur in V.Self.Index.Iterate loop
          R.Total := R.Total + 1;
-         if Verify (To_String (V.Self.Root), Meta_Maps.Element (Cur).Id) then
-            R.Intact := R.Intact + 1;
-         else
-            R.Corrupt := R.Corrupt + 1;
-         end if;
+         declare
+            Res : constant Repair_Result :=
+              Repair (Root, Meta_Maps.Element (Cur).Id);
+         begin
+            if not Res.Recoverable then
+               R.Corrupt := R.Corrupt + 1;
+            elsif Res.Shards_Repaired > 0 then
+               R.Repaired := R.Repaired + 1;
+               R.Shards_Repaired := R.Shards_Repaired + Res.Shards_Repaired;
+            else
+               R.Intact := R.Intact + 1;
+            end if;
+         end;
       end loop;
       return R;
    end Scrub;

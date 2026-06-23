@@ -6,21 +6,23 @@ with Ada.Streams.Stream_IO;       use Ada.Streams.Stream_IO;
 with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Containers.Indefinite_Vectors;
 with Dezhan.Trusted_Core.Hashing; use Dezhan.Trusted_Core.Hashing;
+with Dezhan.Trusted_Core.HMAC;    use Dezhan.Trusted_Core.HMAC;
 with Dezhan.Trusted_Core.Erasure; use Dezhan.Trusted_Core.Erasure;
 with Dezhan.Storage.Deflate;
 
 package body Dezhan.Storage.Cas with SPARK_Mode => Off is
 
    Hex_Digits : constant String   := "0123456789abcdef";
-   Zero_Nonce : constant Nonce_96 := (others => 0);
    Zero_Key   : constant Key_256  := (others => 0);
 
    --  Manifest header layout (bytes), before the chunk-digest table:
    --    0 ..  7  payload length  (bytes actually chunked and stored)
    --    8 .. 15  original length (plaintext length the caller put)
    --   16         compression flag: 0 = stored as-is, 1 = DEFLATE
+   --   17 .. 28   per-object ChaCha20 nonce (12 bytes)
    --  Chunk i's 32-byte cipher-text digest starts at Hdr + i * 32.
-   Hdr : constant := 17;
+   Hdr     : constant := 29;
+   Nonce_Off : constant := 17;
 
    --  Reed-Solomon shard layout: a blob (chunk or manifest) is split into K data
    --  shards of EC_SL bytes (one per EC_SL of length) plus EC_M parity shards.
@@ -34,6 +36,63 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
    --  blocks, so each chunk gets a disjoint keystream range.
    function Counter_For (C : Natural) return Unsigned_32 is
      (Unsigned_32 (C) * 64);
+
+   --  Per-object nonce, derived (convergent) so identical content under the
+   --  same key yields the same nonce, hence the same ciphertext and object id
+   --  (dedup and idempotent Put preserved), while distinct content gets a
+   --  distinct nonce, so the global keystream is never reused as it would be with
+   --  a single fixed nonce. Note: convergent encryption lets a party that already
+   --  knows a plaintext confirm whether it is stored.
+   --
+   --  SHA256 accepts at most Max_Message bytes, so the content digest is a rolling
+   --  fold over the payload one shard-sized block at a time: Acc <- SHA256 (Acc &
+   --  block). The nonce is the first 96 bits of HMAC (key, Acc).
+   function Derive_Nonce
+     (Key : Key_256; Payload : Stream_Element_Array) return Nonce_96
+   is
+      KB  : Byte_Array (0 .. 31);
+      Acc : Digest := (others => 0);
+      Pos : Stream_Element_Offset := Payload'First;
+      H   : Digest;
+      N   : Nonce_96;
+   begin
+      loop
+         declare
+            Take : constant Stream_Element_Offset :=
+              Stream_Element_Offset'Min
+                (EC_SL, (if Pos <= Payload'Last then Payload'Last - Pos + 1
+                         else 0));
+            Blk  : Byte_Array (0 .. 31 + Natural (Take));
+         begin
+            for I in 0 .. 31 loop
+               Blk (I) := Acc (I);
+            end loop;
+            for I in 0 .. Natural (Take) - 1 loop
+               Blk (32 + I) :=
+                 Byte (Payload (Pos + Stream_Element_Offset (I)));
+            end loop;
+            Acc := SHA256 (Blk);
+            Pos := Pos + Take;
+            exit when Pos > Payload'Last;
+         end;
+      end loop;
+
+      for I in 0 .. 31 loop
+         KB (I) := Key (I);
+      end loop;
+      declare
+         MD : Byte_Array (0 .. 31);
+      begin
+         for I in 0 .. 31 loop
+            MD (I) := Acc (I);
+         end loop;
+         H := HMAC_SHA256 (KB, MD);
+      end;
+      for I in N'Range loop
+         N (I) := H (I);   --  first 96 bits of the tag
+      end loop;
+      return N;
+   end Derive_Nonce;
 
    function To_Hex (D : Digest) return Object_Id is
       R : Object_Id := (others => '0');
@@ -265,6 +324,123 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       end;
    end Read_Shards;
 
+   --  Restore a blob's redundancy in place: any shard that is missing or fails
+   --  its digest is regenerated from the survivors (Recoverable is False, and
+   --  nothing is written, if fewer than K shards survive). Idempotent: a blob
+   --  with all shards intact is left untouched (Repaired = 0).
+   procedure Repair_Shards
+     (Dir : String; Repaired : out Natural; Recoverable : out Boolean)
+   is
+      Idx : constant Byte_Array := To_Bytes (Read_File (Compose (Dir, "idx")));
+      K : constant Positive := Positive (Idx (4));
+      M : constant Positive := Positive (Idx (5));
+      N : constant Positive := K + M;
+      Present : Present_Map := (others => False);
+      Shards  : Shard_Block := (others => (others => 0));
+      Data    : Data_Block;
+      Parity  : Parity_Block;
+      Ok      : Boolean;
+   begin
+      Repaired := 0;
+      for S in 1 .. N loop
+         declare
+            File : constant String := Compose (Dir, Shard_Name (S));
+         begin
+            if Exists (File) then
+               declare
+                  SB    : constant Byte_Array := To_Bytes (Read_File (File));
+                  Valid : Boolean := SB'Length = EC_SL;
+               begin
+                  if Valid then
+                     declare
+                        H : constant Digest := SHA256 (SB);
+                     begin
+                        for I in 0 .. 31 loop
+                           if H (I) /= Idx (6 + (S - 1) * 32 + I) then
+                              Valid := False;
+                           end if;
+                        end loop;
+                     end;
+                  end if;
+                  if Valid then
+                     Present (S) := True;
+                     for C in 1 .. EC_SL loop
+                        Shards (S, C) := SB (C - 1);
+                     end loop;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+
+      Reconstruct (K, M, EC_SL, Present, Shards, Data, Ok);
+      Recoverable := Ok;
+      if not Ok then
+         return;  --  beyond M losses: cannot repair, only report
+      end if;
+
+      --  Recompute parity from the recovered data, then rewrite every shard
+      --  that was absent or corrupt. The rewritten bytes match the idx digests
+      --  because the data they derive from is now known-good.
+      Encode (K, M, EC_SL, Data, Parity);
+      for S in 1 .. N loop
+         if not Present (S) then
+            declare
+               Shard : Stream_Element_Array (1 .. EC_SL);
+            begin
+               for C in 1 .. EC_SL loop
+                  Shard (Stream_Element_Offset (C)) :=
+                    Stream_Element
+                      (if S <= K then Data (S, C) else Parity (S - K, C));
+               end loop;
+               Write_File (Compose (Dir, Shard_Name (S)), Shard);
+               Repaired := Repaired + 1;
+            end;
+         end if;
+      end loop;
+   end Repair_Shards;
+
+   function Repair (Root : String; Id : Object_Id) return Repair_Result is
+      Result : Repair_Result := (Recoverable => True, Shards_Repaired => 0);
+      Rep    : Natural;
+      Ok     : Boolean;
+   begin
+      --  Repair the manifest's own shards first so it can be read back.
+      Repair_Shards (Manifest_Path (Root, Id), Rep, Ok);
+      Result.Shards_Repaired := Result.Shards_Repaired + Rep;
+      if not Ok then
+         Result.Recoverable := False;
+         return Result;
+      end if;
+
+      declare
+         MB  : constant Byte_Array :=
+           To_Bytes (Read_Shards (Manifest_Path (Root, Id)));
+         Len : constant Natural := Natural (Get_U64 (MB, 0));
+         N   : constant Natural := (Len + Chunk_Size - 1) / Chunk_Size;
+      begin
+         for C in 0 .. N - 1 loop
+            declare
+               CD : Digest;
+            begin
+               for I in 0 .. 31 loop
+                  CD (I) := MB (Hdr + C * 32 + I);
+               end loop;
+               Repair_Shards (Object_Path (Root, To_Hex (CD)), Rep, Ok);
+               Result.Shards_Repaired := Result.Shards_Repaired + Rep;
+               if not Ok then
+                  Result.Recoverable := False;
+               end if;
+            end;
+         end loop;
+      end;
+      return Result;
+   exception
+      when others =>
+         Result.Recoverable := False;
+         return Result;
+   end Repair;
+
    function Put
      (Root : String; Key : Key_256; Data : Stream_Element_Array)
       return Object_Id
@@ -279,6 +455,8 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
            (if Compress then From_Defl (Comp) else Data);
          P_Len    : constant Natural := Natural (Payload'Length);
          N_Chunks : constant Natural := (P_Len + Chunk_Size - 1) / Chunk_Size;
+         --  Per-object nonce, derived from the stored payload and key.
+         Nonce    : constant Nonce_96 := Derive_Nonce (Key, Payload);
       begin
          if Hdr + N_Chunks * 32 > Max_Message then
             raise Object_Too_Large;
@@ -291,6 +469,9 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
             Put_U64 (Manifest, 0, Unsigned_64 (P_Len));
             Put_U64 (Manifest, 8, Unsigned_64 (Orig_Len));
             Manifest (16) := (if Compress then 1 else 0);
+            for I in Nonce'Range loop
+               Manifest (Nonce_Off + I) := Nonce (I);
+            end loop;
 
             for C in 0 .. N_Chunks - 1 loop
                declare
@@ -306,7 +487,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                      Bytes : Byte_Array := To_Bytes (Payload (First .. Last));
                   begin
                      --  Encrypt at source, then address and store cipher text.
-                     XCrypt (Key, Zero_Nonce, Counter_For (C), Bytes);
+                     XCrypt (Key, Nonce, Counter_For (C), Bytes);
                      declare
                         CD  : constant Digest    := SHA256 (Bytes);
                         Hex : constant Object_Id := To_Hex (CD);
@@ -353,7 +534,11 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
          N_Chunks : constant Natural := (P_Len + Chunk_Size - 1) / Chunk_Size;
          Payload  : Stream_Element_Array (1 .. Stream_Element_Offset (P_Len));
          Pos      : Stream_Element_Offset := 1;
+         Nonce    : Nonce_96;
       begin
+         for I in Nonce'Range loop
+            Nonce (I) := Manifest_Bytes (Nonce_Off + I);
+         end loop;
          for C in 0 .. N_Chunks - 1 loop
             declare
                CD : Digest;
@@ -370,7 +555,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                      raise Corruption_Detected;  --  cipher-text integrity
                   end if;
                   if Reassemble then
-                     XCrypt (Key, Zero_Nonce, Counter_For (C), Bytes);  --  decrypt
+                     XCrypt (Key, Nonce, Counter_For (C), Bytes);  --  decrypt
                      for I in Bytes'Range loop
                         Payload (Pos + Stream_Element_Offset (I)) :=
                           Stream_Element (Bytes (I));

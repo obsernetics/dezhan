@@ -70,13 +70,18 @@ package Dezhan.Vault with SPARK_Mode => Off is
 
    --  Result of an integrity scrub over every stored object.
    type Scrub_Report is record
-      Total   : Natural := 0;
-      Intact  : Natural := 0;
-      Corrupt : Natural := 0;
+      Total           : Natural := 0;  --  objects examined
+      Intact          : Natural := 0;  --  already fully redundant
+      Repaired        : Natural := 0;  --  had >= 1 shard rebuilt from parity
+      Corrupt         : Natural := 0;  --  lost more than M shards: unrepairable
+      Shards_Repaired : Natural := 0;  --  total shard files rebuilt
    end record;
 
-   --  Verify every object's manifest and chunks against their digests
-   --  (detects silent corruption / bit rot). Read-only; needs no key.
+   --  Scrub and self-heal: verify every object's manifest and chunks against
+   --  their digests and rebuild any missing or corrupt shard from parity, in
+   --  place, restoring full redundancy. Needs no key (operates on cipher text).
+   --  Repair rewrites bit-identical content-addressed shards, so it preserves
+   --  immutability and is safe to run on a sealed vault.
    function Scrub (V : Vault_Type) return Scrub_Report;
 
    --  Reclaim chunks and manifests not referenced by any live object (including

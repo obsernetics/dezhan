@@ -437,7 +437,11 @@ procedure Dezhan_Server is
                & "dezhan_scrub_runs" & Natural'Image (Scrub_Runs) & CRLF
                & "# HELP dezhan_scrub_corrupt Objects found corrupt in last scrub" & CRLF
                & "# TYPE dezhan_scrub_corrupt gauge" & CRLF
-               & "dezhan_scrub_corrupt" & Natural'Image (Last_Scrub.Corrupt) & CRLF);
+               & "dezhan_scrub_corrupt" & Natural'Image (Last_Scrub.Corrupt) & CRLF
+               & "# HELP dezhan_scrub_shards_repaired Shards rebuilt in last scrub" & CRLF
+               & "# TYPE dezhan_scrub_shards_repaired gauge" & CRLF
+               & "dezhan_scrub_shards_repaired"
+               & Natural'Image (Last_Scrub.Shards_Repaired) & CRLF);
 
          elsif Method = "POST" and then Path = "/admin/tick" then
             Send_Text (Ch, "200 OK", "trusted_time" & Trusted_Time'Image (Now (V)));
@@ -452,7 +456,9 @@ procedure Dezhan_Server is
             Send_Text (Ch, "200 OK",
               "scrub total" & Natural'Image (Last_Scrub.Total)
               & " intact" & Natural'Image (Last_Scrub.Intact)
-              & " corrupt" & Natural'Image (Last_Scrub.Corrupt));
+              & " repaired" & Natural'Image (Last_Scrub.Repaired)
+              & " corrupt" & Natural'Image (Last_Scrub.Corrupt)
+              & " shards_repaired" & Natural'Image (Last_Scrub.Shards_Repaired));
 
          elsif Method = "POST" and then Path0 = "/admin/gc" then
             Send_Text (Ch, "200 OK",
@@ -645,6 +651,11 @@ begin
             if Last_Scrub.Corrupt > 0 then
                Put_Line ("scrub: " & Natural'Image (Last_Scrub.Corrupt)
                          & " corrupt object(s) detected");
+            end if;
+            if Last_Scrub.Shards_Repaired > 0 then
+               Put_Line ("scrub: rebuilt"
+                         & Natural'Image (Last_Scrub.Shards_Repaired)
+                         & " shard(s) from parity");
             end if;
          end if;
       exception
