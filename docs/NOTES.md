@@ -134,7 +134,11 @@ demo key is used at rest).
   the headline. Both modes share the S3 API, storage engine, audit chain, and
   scrubbing; only Immutable buckets use the retention state machine.
 - Local auth realm, RBAC, quorum approvals, API tokens, service accounts.
-- Observability: structured logs (health endpoints and Prometheus metrics exist).
+- Observability: structured (key=value) request logs, a `/healthz` endpoint, and
+  Prometheus `/metrics` covering object count, storage bytes on disk, quarantined
+  objects, audit length, scrub status (runs/corrupt/shards repaired), retention
+  denials, trusted time, and air-gap status (sealed, ingest-only, sync window).
+  Replication lag is not applicable (multi-site replication is excluded from MVP).
 - Air-gap features (vault level, implemented): operator seal (read-only),
   one-way ingest (Get raises Egress_Denied), sync windows (writes raise
   Sync_Closed while closed), and technology-break export (copy the store to an

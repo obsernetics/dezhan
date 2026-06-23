@@ -280,8 +280,42 @@ procedure Dezhan_Server is
    V : Vault_Type;
 
    --  Latest background-scrub result (for /metrics).
-   Last_Scrub : Scrub_Report;
-   Scrub_Runs : Natural := 0;
+   Last_Scrub     : Scrub_Report;
+   Scrub_Runs     : Natural := 0;
+   Denied_Deletes : Natural := 0;   --  deletes refused by retention/WORM
+
+   --  Total bytes stored on disk under Path (recursive). Backs the storage
+   --  capacity metric the spec's observability section calls for.
+   function Dir_Bytes (Path : String) return Long_Long_Integer is
+      use Ada.Directories;
+      Total : Long_Long_Integer := 0;
+      S     : Search_Type;
+      E     : Directory_Entry_Type;
+   begin
+      if not Exists (Path) then
+         return 0;
+      end if;
+      Start_Search (S, Path, "", (others => True));
+      while More_Entries (S) loop
+         Get_Next_Entry (S, E);
+         declare
+            Nm : constant String := Simple_Name (E);
+         begin
+            if Nm /= "." and then Nm /= ".." then
+               case Kind (E) is
+                  when Directory =>
+                     Total := Total + Dir_Bytes (Full_Name (E));
+                  when Ordinary_File =>
+                     Total := Total + Long_Long_Integer (Size (Full_Name (E)));
+                  when others =>
+                     null;
+               end case;
+            end if;
+         end;
+      end loop;
+      End_Search (S);
+      return Total;
+   end Dir_Bytes;
 
    LF : constant String := ASCII.LF & "";
 
@@ -651,7 +685,20 @@ procedure Dezhan_Server is
                & "# HELP dezhan_scrub_shards_repaired Shards rebuilt in last scrub" & CRLF
                & "# TYPE dezhan_scrub_shards_repaired gauge" & CRLF
                & "dezhan_scrub_shards_repaired"
-               & Natural'Image (Last_Scrub.Shards_Repaired) & CRLF);
+               & Natural'Image (Last_Scrub.Shards_Repaired) & CRLF
+               & "# HELP dezhan_storage_bytes Bytes stored on disk under the vault root" & CRLF
+               & "# TYPE dezhan_storage_bytes gauge" & CRLF
+               & "dezhan_storage_bytes" & Long_Long_Integer'Image (Dir_Bytes (Root)) & CRLF
+               & "# HELP dezhan_retention_denied_total Deletes refused by retention/WORM" & CRLF
+               & "# TYPE dezhan_retention_denied_total counter" & CRLF
+               & "dezhan_retention_denied_total" & Natural'Image (Denied_Deletes) & CRLF
+               & "# HELP dezhan_ingest_only One-way ingest mode (reads blocked)" & CRLF
+               & "# TYPE dezhan_ingest_only gauge" & CRLF
+               & "dezhan_ingest_only" & (if One_Way_Ingest (V) then " 1" else " 0") & CRLF
+               & "# HELP dezhan_sync_window_open Sync window currently open" & CRLF
+               & "# TYPE dezhan_sync_window_open gauge" & CRLF
+               & "dezhan_sync_window_open"
+               & (if Sync_Window_Open (V) then " 1" else " 0") & CRLF);
 
          elsif Method = "POST" and then Path = "/admin/tick" then
             Send_Text (Ch, "200 OK", "trusted_time" & Trusted_Time'Image (Now (V)));
@@ -822,6 +869,7 @@ procedure Dezhan_Server is
                   then
                      Send_Text (Ch, "200 OK", "deleted " & Name);
                   else
+                     Denied_Deletes := Denied_Deletes + 1;
                      Send_Text (Ch, "403 Forbidden",
                        "object is retained and cannot be deleted yet");
                   end if;
