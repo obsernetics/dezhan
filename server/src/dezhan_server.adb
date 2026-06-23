@@ -42,6 +42,7 @@ with GNAT.Sockets;         use GNAT.Sockets;
 with Dezhan.Trusted_Core.Times;     use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Retention; use Dezhan.Trusted_Core.Retention;
 with Dezhan.Trusted_Core.Cipher;    use Dezhan.Trusted_Core.Cipher;
+with Dezhan.Trusted_Core.Hashing;   use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Vault;                  use Dezhan.Vault;
 with Dezhan.Sigv4;
 
@@ -54,12 +55,29 @@ procedure Dezhan_Server is
    Root : constant String :=
      (if Argument_Count >= 2 then Argument (2) else "/tmp/dezhan-vault");
 
-   --  Fixed demo key. Real key management is future work (docs/NOTES.md).
-   Key : constant Key_256 := (others => 42);
-
    function Env (Name, Default : String) return String is
      (if Ada.Environment_Variables.Exists (Name)
       then Ada.Environment_Variables.Value (Name) else Default);
+
+   --  Vault data-encryption key, derived from a passphrase (DEZHAN_VAULT_KEY) by
+   --  SHA-256 so any length works; a demo default keeps the local POC turnkey.
+   --  Wrapping/escrow of this key is the remaining key-management work.
+   function Derive_Key (Pass : String) return Key_256 is
+      B : Byte_Array (0 .. Pass'Length - 1);
+      D : Digest;
+      K : Key_256;
+   begin
+      for I in 0 .. Pass'Length - 1 loop
+         B (I) := Byte (Character'Pos (Pass (Pass'First + I)));
+      end loop;
+      D := SHA256 (B);
+      for I in 0 .. 31 loop
+         K (I) := D (I);
+      end loop;
+      return K;
+   end Derive_Key;
+
+   Key : constant Key_256 := Derive_Key (Env ("DEZHAN_VAULT_KEY", "dezhan-demo-vault-key"));
 
    --  The seeded demo SigV4 account (more can be loaded from a credentials
    --  file), and whether unsigned requests to /v are rejected.
