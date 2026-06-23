@@ -46,6 +46,9 @@ with Dezhan.Trusted_Core.Cipher;    use Dezhan.Trusted_Core.Cipher;
 with Dezhan.Trusted_Core.Hashing;   use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Vault;                  use Dezhan.Vault;
 with Dezhan.Sigv4;
+with Dezhan.Kdf;                    use Dezhan.Kdf;
+with Ada.Streams.Stream_IO;
+with Ada.Directories;
 
 procedure Dezhan_Server is
 
@@ -60,25 +63,75 @@ procedure Dezhan_Server is
      (if Ada.Environment_Variables.Exists (Name)
       then Ada.Environment_Variables.Value (Name) else Default);
 
-   --  Vault data-encryption key, derived from a passphrase (DEZHAN_VAULT_KEY) by
-   --  SHA-256 so any length works; a demo default keeps the local POC turnkey.
-   --  Wrapping/escrow of this key is the remaining key-management work.
-   function Derive_Key (Pass : String) return Key_256 is
-      B : Byte_Array (0 .. Pass'Length - 1);
-      D : Digest;
-      K : Key_256;
+   --  PBKDF2 work factor. Higher means a stolen vault is proportionally more
+   --  expensive to brute-force; tune for the deployment's CPU.
+   KDF_Iters : constant Positive :=
+     Positive'Value (Env ("DEZHAN_KDF_ITERS", "200000"));
+
+   --  Per-vault random salt for the KDF, kept in the clear at <root>/vault.salt
+   --  (a salt is not secret). Created on first start from /dev/urandom.
+   function Vault_Salt (Root : String) return Byte_Array is
+      package SIO renames Ada.Streams.Stream_IO;
+      package Dir renames Ada.Directories;
+      Path : constant String := Dir.Compose (Root, "vault.salt");
+      F    : SIO.File_Type;
+      SEA  : Stream_Element_Array (1 .. 16);
+      Last : Stream_Element_Offset;
+      R    : Byte_Array (0 .. 15);
+   begin
+      Dir.Create_Path (Root);
+      if not Dir.Exists (Path) then
+         declare
+            U : SIO.File_Type;
+         begin
+            SIO.Open (U, SIO.In_File, "/dev/urandom");
+            SIO.Read (U, SEA, Last);
+            SIO.Close (U);
+            SIO.Create (F, SIO.Out_File, Path);
+            SIO.Write (F, SEA (1 .. Last));
+            SIO.Close (F);
+         end;
+      end if;
+      SIO.Open (F, SIO.In_File, Path);
+      SIO.Read (F, SEA, Last);
+      SIO.Close (F);
+      for I in 0 .. Natural (Last) - 1 loop
+         R (I) := Byte (SEA (Stream_Element_Offset (I + 1)));
+      end loop;
+      return R (0 .. Natural (Last) - 1);
+   end Vault_Salt;
+
+   --  Vault data-encryption key, derived from a passphrase (DEZHAN_VAULT_KEY)
+   --  with PBKDF2-HMAC-SHA256 over the per-vault salt. The passphrase is first
+   --  folded to 32 bytes with SHA-256 so any length is accepted. Wrapping/escrow
+   --  of the derived key is the remaining key-management work.
+   function Derive_Key (Pass, Root : String) return Key_256 is
+      PB   : Byte_Array (0 .. Pass'Length - 1);
+      Salt : constant Byte_Array := Vault_Salt (Root);
+      PW   : Digest;
+      D    : Digest;
+      K    : Key_256;
    begin
       for I in 0 .. Pass'Length - 1 loop
-         B (I) := Byte (Character'Pos (Pass (Pass'First + I)));
+         PB (I) := Byte (Character'Pos (Pass (Pass'First + I)));
       end loop;
-      D := SHA256 (B);
+      PW := SHA256 (PB);
+      declare
+         PWB : Byte_Array (0 .. 31);
+      begin
+         for I in 0 .. 31 loop
+            PWB (I) := PW (I);
+         end loop;
+         D := PBKDF2_HMAC_SHA256 (PWB, Salt, KDF_Iters);
+      end;
       for I in 0 .. 31 loop
          K (I) := D (I);
       end loop;
       return K;
    end Derive_Key;
 
-   Key : constant Key_256 := Derive_Key (Env ("DEZHAN_VAULT_KEY", "dezhan-demo-vault-key"));
+   Key : constant Key_256 :=
+     Derive_Key (Env ("DEZHAN_VAULT_KEY", "dezhan-demo-vault-key"), Root);
 
    --  The seeded demo SigV4 account (more can be loaded from a credentials
    --  file), and whether unsigned requests to /v are rejected.
