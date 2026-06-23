@@ -459,6 +459,10 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    function Object_Count (V : Vault_Type) return Natural is
      (Natural (V.Self.Index.Length));
 
+   function Object_Etag (V : Vault_Type; Name : String) return String is
+     (if V.Self.Index.Contains (Name)
+      then String (V.Self.Index.Element (Name).Id) else "");
+
    function Object_Names (V : Vault_Type) return String is
       R : Unbounded_String;
    begin

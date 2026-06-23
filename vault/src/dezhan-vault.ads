@@ -61,6 +61,10 @@ package Dezhan.Vault with SPARK_Mode => Off is
    function Contains (V : Vault_Type; Name : String) return Boolean;
    function Object_Count (V : Vault_Type) return Natural;
 
+   --  The object's content id (its manifest hash), usable as an S3 ETag; "" if
+   --  the object is absent.
+   function Object_Etag (V : Vault_Type; Name : String) return String;
+
    --  Newline-separated list of stored object names.
    function Object_Names (V : Vault_Type) return String;
 

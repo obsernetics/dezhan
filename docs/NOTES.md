@@ -108,8 +108,11 @@ demo key is used at rest).
 - Air-gap features (vault level, implemented): operator seal (read-only),
   one-way ingest (Get raises Egress_Denied), sync windows (writes raise
   Sync_Closed while closed), and technology-break export (copy the store to an
-  independent, openable destination). All persisted. Still to do: expose them
-  on the server admin API and add scheduled (wall-clock) sync windows.
+  independent, openable destination). All persisted and exposed on the server
+  admin API (POST /admin/ingest-only, /admin/sync-window, /admin/export,
+  /admin/gc). Still to do: scheduled (wall-clock) sync windows. The server also
+  returns S3 ETag headers (the object content id) on PUT/GET/HEAD and emits
+  structured (key=value) request log lines.
 - Hardware-backed time anchor (TPM or secure RTC) behind the existing pluggable
   seam in the Clock Guard.
 - Durable, crash-safe persistence for trusted-core state.

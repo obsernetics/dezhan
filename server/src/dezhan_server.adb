@@ -14,6 +14,10 @@ pragma Ada_2022;
 --    POST   /admin/tick         advance trusted time from the system clock
 --    POST   /admin/seal         operator seal (read-only)
 --    POST   /admin/scrub        run an integrity scrub
+--    POST   /admin/gc           garbage-collect orphaned chunks/manifests
+--    POST   /admin/ingest-only?on=1|0   one-way ingest (block reads)
+--    POST   /admin/sync-window?open=1|0 open/close the sync window
+--    POST   /admin/export?dest=<path>   technology-break export
 --    GET    /v                  list objects
 --    PUT    /v/<name>           store (headers X-Dezhan-Mode, X-Dezhan-Retain)
 --    GET    /v/<name>           retrieve
@@ -191,15 +195,17 @@ procedure Dezhan_Server is
    end Header;
 
    procedure Send
-     (Ch     : Stream_Access;
-      Status : String;
-      Ctype  : String;
-      Payload : Stream_Element_Array)
+     (Ch      : Stream_Access;
+      Status  : String;
+      Ctype   : String;
+      Payload : Stream_Element_Array;
+      Extra   : String := "")
    is
       Head : constant String :=
         "HTTP/1.1 " & Status & CRLF
         & "Content-Type: " & Ctype & CRLF
         & "Content-Length:" & Stream_Element_Offset'Image (Payload'Length) & CRLF
+        & Extra
         & "Connection: close" & CRLF & CRLF;
    begin
       String'Write (Ch, Head);
@@ -208,10 +214,17 @@ procedure Dezhan_Server is
       end if;
    end Send;
 
-   procedure Send_Text (Ch : Stream_Access; Status, Text : String) is
+   procedure Send_Text
+     (Ch : Stream_Access; Status, Text : String; Extra : String := "") is
    begin
-      Send (Ch, Status, "text/plain", To_SEA (Text));
+      Send (Ch, Status, "text/plain", To_SEA (Text), Extra);
    end Send_Text;
+
+   --  Structured (key=value) log line to stdout.
+   procedure Log (Msg : String) is
+   begin
+      Put_Line ("ts=" & Trusted_Time'Image (Now (V)) & " " & Msg);
+   end Log;
 
    --  N-th Sep-separated field of S ("" if absent).
    function Part (S : String; Sep : Character; N : Positive) return String is
@@ -337,6 +350,11 @@ procedure Dezhan_Server is
       Len    : constant Natural :=
         (if Header (Head, "Content-Length") = "" then 0
          else Natural'Value (Header (Head, "Content-Length")));
+      QMark  : constant Natural := Index (Path, "?");
+      Path0  : constant String :=
+        (if QMark = 0 then Path else Path (Path'First .. QMark - 1));
+      PQuery : constant String :=
+        (if QMark = 0 then "" else Path (QMark + 1 .. Path'Last));
    begin
       --  Drain the request body (if any).
       declare
@@ -348,6 +366,8 @@ procedure Dezhan_Server is
 
          --  Keep trusted time current from the real system clock.
          Tick_From_System (V);
+         Log ("event=request method=" & Method & " path=" & Path0
+              & " bytes=" & Natural'Image (Len));
 
          --  Authenticate data-plane (/v) requests via SigV4 when present.
          if Path = "/v"
@@ -407,13 +427,43 @@ procedure Dezhan_Server is
             Seal (V);
             Send_Text (Ch, "200 OK", "vault sealed (read-only)");
 
-         elsif Method = "POST" and then Path = "/admin/scrub" then
+         elsif Method = "POST" and then Path0 = "/admin/scrub" then
             Last_Scrub := Scrub (V);
             Scrub_Runs := Scrub_Runs + 1;
             Send_Text (Ch, "200 OK",
               "scrub total" & Natural'Image (Last_Scrub.Total)
               & " intact" & Natural'Image (Last_Scrub.Intact)
               & " corrupt" & Natural'Image (Last_Scrub.Corrupt));
+
+         elsif Method = "POST" and then Path0 = "/admin/gc" then
+            Send_Text (Ch, "200 OK",
+              "reclaimed" & Natural'Image (Collect_Garbage (V)));
+
+         elsif Method = "POST" and then Path0 = "/admin/ingest-only" then
+            Set_One_Way_Ingest (V, Q_Val (PQuery, "on=") = "1");
+            Send_Text (Ch, "200 OK",
+              "one_way_ingest=" & (if One_Way_Ingest (V) then "on" else "off"));
+
+         elsif Method = "POST" and then Path0 = "/admin/sync-window" then
+            if Q_Val (PQuery, "open=") = "1" then
+               Open_Sync_Window (V);
+            else
+               Close_Sync_Window (V);
+            end if;
+            Send_Text (Ch, "200 OK",
+              "sync_window=" & (if Sync_Window_Open (V) then "open" else "closed"));
+
+         elsif Method = "POST" and then Path0 = "/admin/export" then
+            declare
+               Dest : constant String := Q_Val (PQuery, "dest=");
+            begin
+               if Dest = "" then
+                  Send_Text (Ch, "400 Bad Request", "missing dest=");
+               else
+                  Export (V, Dest);
+                  Send_Text (Ch, "200 OK", "exported to " & Dest);
+               end if;
+            end;
 
          elsif Method = "GET" and then (Path = "/v" or else Path = "/v/") then
             Send_Text (Ch, "200 OK", Object_Names (V));
@@ -458,19 +508,24 @@ procedure Dezhan_Server is
                   Put_Object (V, Name, Body_Bytes, Mode, Retain);
                   Send_Text (Ch, "200 OK",
                     "stored " & Name & " mode=" & Mode'Image
-                    & " retain=" & Trusted_Time'Image (Retain));
+                    & " retain=" & Trusted_Time'Image (Retain),
+                    Extra => "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF);
 
                elsif Method = "GET" then
                   if Contains (V, Name) then
                      Send (Ch, "200 OK", "application/octet-stream",
-                           Get_Object (V, Name));
+                           Get_Object (V, Name),
+                           Extra => "ETag: " & '"' & Object_Etag (V, Name)
+                                    & '"' & CRLF);
                   else
                      Send_Text (Ch, "404 Not Found", "no such object");
                   end if;
 
                elsif Method = "HEAD" then
                   if Contains (V, Name) then
-                     Send_Text (Ch, "200 OK", "");
+                     Send_Text (Ch, "200 OK", "",
+                       Extra => "ETag: " & '"' & Object_Etag (V, Name)
+                                & '"' & CRLF);
                   else
                      Send_Text (Ch, "404 Not Found", "");
                   end if;
@@ -504,6 +559,10 @@ procedure Dezhan_Server is
             Send_Text (Ch, "404 Not Found", "no such object");
          when No_Such_Upload =>
             Send_Text (Ch, "404 Not Found", "no such upload");
+         when Egress_Denied =>
+            Send_Text (Ch, "403 Forbidden", "reads are blocked (one-way ingest)");
+         when Sync_Closed =>
+            Send_Text (Ch, "409 Conflict", "sync window is closed");
       end;
    end Handle;
 
