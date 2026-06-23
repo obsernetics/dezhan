@@ -1,62 +1,60 @@
 # dezhan
 
-dezhan is an on-premise cyber-resilience platform for regulated organizations: an
-immutable, air-gapped, formally verifiable backup vault. The value proposition is
-provable immutability, meaning integrity-critical behavior is verified with SPARK
-rather than only tested.
+dezhan is a secure backup vault. It replaces Veeam and MinIO with one system: an
+immutable, air-gapped, S3-compatible object store built for banking-grade
+security and stability, where the integrity-critical core is formally verified
+in SPARK (machine-proved, not just tested).
 
-## Status
+- **Immutable by construction.** WORM retention with compliance and governance
+  locks and legal hold. A retained object cannot be deleted before expiry, and a
+  manipulated system clock cannot expire it.
+- **S3-compatible.** PUT/GET/HEAD/DELETE, multipart upload, listing, and AWS
+  SigV4 auth, so existing backup tools and clients work unchanged.
+- **Verifiable integrity.** Every object is content-addressed, erasure-coded, and
+  continuously scrubbed and self-healed; the trusted core's invariants are proved
+  with `gnatprove`.
+- **Air-gapped.** One-way ingest, sync windows, an operator seal, and
+  technology-break export for offline isolation.
 
-Trusted core under construction. Every invariant is discharged by `gnatprove`
-with 0 unproved checks:
+## Assurance
+
+The integrity-critical core is written in SPARK and discharged by `gnatprove`
+with 270 checks and 0 unproved:
 
 - **Retention State Machine.** Retention can be extended but never shortened. In
   compliance mode a retained object cannot be deleted before expiry, with no
-  override; governance mode allows only an audited bypass. A legal hold blocks
-  deletion absolutely (even past expiry, even under a governance bypass) until
-  released.
+  override; governance mode allows only an audited bypass; a legal hold blocks
+  deletion absolutely (even past expiry, even under a bypass) until released.
 - **Clock Integrity Guard.** Trusted time advances only by a monotonic clock and
-  is provably independent of the untrusted system clock, so moving the system
-  clock cannot expire a lock.
-- **Audit Chain.** An append-only, hash-chained log with in-tree SHA-256. A past
-  entry cannot be altered without breaking the link to its successor (proved,
-  given standard hash collision resistance).
+  is provably independent of the system clock, so moving the clock cannot expire
+  a lock.
+- **Audit Chain.** An append-only, hash-chained log (in-tree SHA-256). A past
+  entry cannot be altered without breaking the link to its successor.
 - **Erasure Coding.** Systematic Reed-Solomon over GF(2^8). Any K of the N shards
-  reconstruct the original data; validated by an exhaustive round-trip test.
+  reconstruct the original data.
 
-This completes the SPARK-verified trusted core (270 checks, 0 unproved).
+The cryptographic primitives (SHA-256, ChaCha20, HMAC-SHA256) are in-tree with no
+external dependency, validated against published test vectors.
 
-Platform layer (regular Ada), an end-to-end POC on top of the verified core:
+## Platform
 
-- **Storage** (`Dezhan.Storage.Cas`): content-addressed chunks (SHA-256), a
-  Merkle-style manifest, deduplication, in-tree DEFLATE compression
-  (`Dezhan.Storage.Deflate`, RFC 1951, no external dependency; applied before
-  encryption, smaller of compressed/stored kept), encryption at source
-  (ChaCha20), and Reed-Solomon erasure coding (each chunk is stored as 4 data +
-  2 parity shards), so up to two lost or corrupt shards per chunk are
-  reconstructed on read and unrecoverable loss is detected.
-- **Vault** (`Dezhan.Vault`): ties storage + retention + clock + audit into WORM
-  behavior. A compliance-locked object cannot be deleted before expiry (even with
-  a bypass), a manipulated clock cannot expire it, and every action is recorded
-  in a self-verifying audit chain.
-- **Server** (`dezhan_server`): a small HTTP API (PUT/GET/HEAD/DELETE under
-  `/v/<name>`, multipart via `?uploads` / `?uploadId=`, `GET /v` to list,
-  `POST /admin/seal` for read-only mode,
-  `POST /admin/scrub`, `POST /admin/legal-hold?name=X&on=1|0` to place or release
-  a legal hold, plus `/healthz`, Prometheus `/metrics`, and a minimal web
-  UI at `/`), built on `GNAT.Sockets` with no external dependency. It also runs a
-  background integrity scrub during idle periods (single-threaded, via a socket
-  selector timeout). `/v` requests are authenticated with AWS SigV4 when an
-  `Authorization` header is present (anonymous unless `DEZHAN_REQUIRE_AUTH` is
-  set).
-- **CLI** (`dezhan_cli`): a thin client for the server, including `sput` to send
-  a SigV4-signed PUT.
+On top of the verified core, dezhan runs an end-to-end S3 service:
 
-The vault persists its object index, audit chain, and trusted-time high-water
-mark to disk, so it survives a restart. SigV4 authentication, multipart uploads,
-and key management are not in the POC (see `docs/NOTES.md`).
+- **Storage** (`Dezhan.Storage.Cas`): content-addressed chunks, deduplication,
+  in-tree DEFLATE compression (`Dezhan.Storage.Deflate`, RFC 1951), encryption at
+  source (ChaCha20 under a per-object convergent nonce), and Reed-Solomon erasure
+  coding (4 data + 2 parity per chunk). A background scrub verifies every shard
+  and rebuilds missing or corrupt ones from parity.
+- **Vault** (`Dezhan.Vault`): WORM orchestration tying storage, retention, clock,
+  and audit together, with multipart uploads, garbage collection, legal hold, and
+  air-gap modes. State is persisted, so the vault survives a restart.
+- **Server** (`dezhan_server`): an HTTP/S3-style API on `GNAT.Sockets` with no
+  external dependency, AWS SigV4 auth, Prometheus `/metrics`, `/healthz`, and a
+  minimal web UI.
+- **CLI** (`dezhan_cli`): a thin signed client, including `sput` for a
+  SigV4-signed PUT.
 
-See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
+See [`docs/SPEC.md`](docs/SPEC.md) for the specification (the source of truth) and
 [`docs/NOTES.md`](docs/NOTES.md) for the roadmap and current limitations.
 
 ## Build and verify
@@ -72,15 +70,12 @@ gnatprove -P dezhan_trusted_core.gpr --level=2 --report=all  # prove the invaria
 ./tests/obj/test_retention && ./tests/obj/test_clock_guard   # run the tests
 ```
 
-## Continuous integration and releases
+## Run
 
-- `.github/workflows/ada.yml` (**Ada / Build Ada project with GPRbuild**) builds
-  every project with GPRbuild on the Alire-managed GNAT toolchain and runs the
-  test drivers on each push and pull request.
-- `.github/workflows/release.yml` builds the static binaries on a `v*` tag and
-  generates **SLSA3 build provenance** for them via the official
-  `slsa-framework/slsa-github-generator` reusable workflow, attaching the signed
-  provenance to the release.
+```sh
+gprbuild -P server/dezhan_server.gpr
+server/obj/dezhan_server 8080 /tmp/dezhan-vault   # then open http://localhost:8080/
+```
 
 ## Layout
 
@@ -94,14 +89,6 @@ vault/          WORM orchestration over the trusted core (Ada)
 server/         HTTP/S3-style server + web UI (Ada, GNAT.Sockets)
 cli/            command-line client (Ada)
 auth/           AWS SigV4 signing core (Ada, on the verified HMAC-SHA256)
-```
-
-## Run the POC
-
-```sh
-# in the build environment (GNAT + gnatprove via Alire)
-gprbuild -P server/dezhan_server.gpr
-server/obj/dezhan_server 8080 /tmp/dezhan-vault   # then open http://localhost:8080/
 ```
 
 Licensed under Apache-2.0.
