@@ -63,7 +63,8 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   `<root>/vault.state` on each mutation and reloaded on open, so the vault
   survives a restart (write-temp-then-rename; full crash-safety with fsync and a
   binary format is still to do). Still to do: AWS SigV4 authentication, multipart
-  uploads, bucket/LIST semantics, concurrency (the server is single-threaded),
+  uploads, S3 bucket/prefix semantics (a flat object list exists via GET /v),
+concurrency (the server is single-threaded),
   structured logs, and real key management (a fixed demo key is used).
 - General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays

@@ -60,6 +60,8 @@ procedure Dezhan_Server is
      & "name <input id=gn value=backup1> <button onclick=getObj()>Get</button> "
      & "<label><input type=checkbox id=bp> bypass</label> <button onclick=del()>Delete</button>"
      & "<pre id=out></pre></section>" & LF
+     & "<section><h3>Objects</h3><button onclick=load()>Refresh</button>"
+     & "<pre id=objs></pre></section>" & LF
      & "<section><h3>Metrics</h3><pre id=metrics>loading...</pre></section>" & LF
      & "<script>" & LF
      & "async function store(){const r=await fetch('/v/'+n.value,{method:'PUT',"
@@ -70,7 +72,8 @@ procedure Dezhan_Server is
      & "out.textContent=r.status+' '+await r.text()}" & LF
      & "async function del(){const r=await fetch('/v/'+gn.value,{method:'DELETE',"
      & "headers:{'X-Dezhan-Bypass':bp.checked}});out.textContent=r.status+' '+await r.text();load()}" & LF
-     & "async function load(){metrics.textContent=await (await fetch('/metrics')).text()}load()" & LF
+     & "async function load(){metrics.textContent=await (await fetch('/metrics')).text();"
+     & "objs.textContent=(await (await fetch('/v/')).text())||'(none)'}load()" & LF
      & "</script></body></html>" & LF;
 
    function To_SEA (S : String) return Stream_Element_Array is
@@ -202,6 +205,9 @@ procedure Dezhan_Server is
          elsif Method = "POST" and then Path = "/admin/seal" then
             Seal (V);
             Send_Text (Ch, "200 OK", "vault sealed (read-only)");
+
+         elsif Method = "GET" and then (Path = "/v" or else Path = "/v/") then
+            Send_Text (Ch, "200 OK", Object_Names (V));
 
          elsif Path'Length > 3 and then Path (Path'First .. Path'First + 2) = "/v/" then
             declare

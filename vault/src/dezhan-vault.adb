@@ -285,6 +285,16 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    function Object_Count (V : Vault_Type) return Natural is
      (Natural (V.Self.Index.Length));
 
+   function Object_Names (V : Vault_Type) return String is
+      R : Unbounded_String;
+   begin
+      for Cur in V.Self.Index.Iterate loop
+         Append (R, Meta_Maps.Key (Cur));
+         Append (R, ASCII.LF);
+      end loop;
+      return To_String (R);
+   end Object_Names;
+
    function Delete_Object
      (V : in out Vault_Type; Name : String; Bypass : Boolean) return Boolean
    is

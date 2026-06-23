@@ -40,6 +40,9 @@ package Dezhan.Vault with SPARK_Mode => Off is
    function Contains (V : Vault_Type; Name : String) return Boolean;
    function Object_Count (V : Vault_Type) return Natural;
 
+   --  Newline-separated list of stored object names.
+   function Object_Names (V : Vault_Type) return String;
+
    --  Attempt to delete Name. Returns True iff retention permitted it (Bypass
    --  only helps in Governance mode). The outcome is recorded in the audit chain.
    function Delete_Object
