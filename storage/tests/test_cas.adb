@@ -2,7 +2,6 @@ pragma Ada_2022;
 with Ada.Text_IO;           use Ada.Text_IO;
 with Ada.Command_Line;      use Ada.Command_Line;
 with Ada.Streams;           use Ada.Streams;
-with Ada.Streams.Stream_IO;
 with Ada.Directories;       use Ada.Directories;
 with Dezhan.Trusted_Core.Cipher; use Dezhan.Trusted_Core.Cipher;
 with Dezhan.Storage.Cas;    use Dezhan.Storage.Cas;
@@ -125,6 +124,28 @@ begin
       Check (Delete_N_Shards (2) = 2, "removed 2 more shards (4 of 6 gone)");
       Check (not Verify (Root, Id),
              "verify detects unrecoverable loss (> M shards)");
+   end;
+
+   --  Manifest erasure protection: the manifest is itself sharded, so losing
+   --  shards of it is recoverable (no single metadata corruption loses the
+   --  object).
+   declare
+      Small : Stream_Element_Array (1 .. 64);
+      Id2   : Object_Id;
+   begin
+      for I in Small'Range loop
+         Small (I) := Stream_Element ((Integer (I) * 11 + 3) mod 256);
+      end loop;
+      Id2 := Put (Root, Key, Small);
+      declare
+         Dir : constant String :=
+           Compose (Compose (Root, "manifests"), String (Id2));
+      begin
+         Delete_File (Compose (Dir, "1"));   --  lose two manifest shards
+         Delete_File (Compose (Dir, "2"));
+         Check (Equal (Get (Root, Key, Id2), Small),
+                "manifest recovered from parity after losing 2 shards");
+      end;
    end;
 
    --  Empty object round-trips.

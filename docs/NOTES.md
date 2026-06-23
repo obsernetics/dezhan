@@ -37,8 +37,10 @@ finished, verified work. Keep it current as the trusted core grows.
   against NIST vectors. Bounds are fixed (Max_Data 8, Max_Parity 8, shard length
   1024). The storage engine now uses it: each chunk is stored as 4 data + 2
   parity shards (each with its own digest), so up to 2 lost/corrupt shards per
-  chunk are reconstructed on read; beyond that, loss is detected. Tuning the
-  K/M layout and protecting the manifest itself with parity are follow-ups.
+  chunk are reconstructed on read; beyond that, loss is detected. Manifests are
+  erasure-protected the same way (stored as shard directories), so no single
+  metadata corruption loses an object. Tuning the K/M layout per data class is a
+  follow-up.
 
 ## Future improvements (per docs/SPEC.md, deferred by scope)
 

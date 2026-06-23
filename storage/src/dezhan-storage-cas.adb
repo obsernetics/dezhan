@@ -1,4 +1,6 @@
 with Interfaces;                  use Interfaces;
+with Ada.Strings;                 use Ada.Strings;
+with Ada.Strings.Fixed;           use Ada.Strings.Fixed;
 with Ada.Directories;             use Ada.Directories;
 with Ada.Streams.Stream_IO;       use Ada.Streams.Stream_IO;
 with Ada.Containers.Indefinite_Ordered_Sets;
@@ -12,13 +14,13 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
    Zero_Nonce : constant Nonce_96 := (others => 0);
    Zero_Key   : constant Key_256  := (others => 0);
 
-   --  Reed-Solomon layout for each chunk: K data + M parity shards, each
-   --  EC_SL bytes (K * EC_SL = Chunk_Size). Any K of the N shards reconstruct
-   --  the chunk, so up to M lost or corrupt shards per chunk are recoverable.
-   EC_K  : constant := 4;
-   EC_M  : constant := 2;
-   EC_N  : constant := EC_K + EC_M;   --  6
-   EC_SL : constant := Chunk_Size / EC_K;  --  1024
+   --  Reed-Solomon shard layout: a blob (chunk or manifest) is split into K data
+   --  shards of EC_SL bytes (one per EC_SL of length) plus EC_M parity shards.
+   --  Any K of the K+M shards reconstruct the blob, so up to EC_M lost or corrupt
+   --  shards are recoverable. A full Chunk_Size chunk yields Chunk_Size/EC_SL = 4
+   --  data shards; a manifest yields up to 8.
+   EC_M  : constant := 2;       --  parity shards per blob
+   EC_SL : constant := 1024;    --  shard length in bytes
 
    --  ChaCha20 counter base for chunk C: 4096-byte chunks are 64 keystream
    --  blocks, so each chunk gets a disjoint keystream range.
@@ -110,81 +112,89 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       return V;
    end Get_U64;
 
-   --  Shard file name within a chunk directory: "1".."6", then "idx".
+   --  Shard file name within a shard directory: "1".."10", then "idx".
    function Shard_Name (S : Positive) return String is
-     (1 => Character'Val (Character'Pos ('0') + S));
+     (Trim (S'Image, Both));
 
-   --  Store a cipher-text chunk (<= Chunk_Size bytes) as K data + M parity
-   --  shards plus an "idx" file holding the chunk length and per-shard digests.
-   procedure Store_Chunk (Root, Hex : String; Cipher : Stream_Element_Array) is
-      Dir  : constant String := Object_Path (Root, Hex);
-      CLen : constant Natural := Natural (Cipher'Length);
+   --  Store Data in directory Dir as K data + EC_M parity shards (K = one shard
+   --  per EC_SL bytes), with an "idx" file holding the length, K, M, and
+   --  per-shard digests. Used for chunks and manifests alike.
+   procedure Store_Shards (Dir : String; Data : Stream_Element_Array) is
+      Len : constant Natural  := Natural (Data'Length);
+      K   : constant Positive := Natural'Max (1, (Len + EC_SL - 1) / EC_SL);
+      M   : constant Positive := EC_M;
+      N   : constant Positive := K + M;
    begin
       if Exists (Dir) then
          return;  --  deduplicated
       end if;
       declare
-         Data   : Data_Block := (others => (others => 0));
+         DB     : Data_Block := (others => (others => 0));
          Parity : Parity_Block;
-         Idx    : Byte_Array (0 .. 4 + EC_N * 32 - 1) := (others => 0);
+         Idx    : Byte_Array (0 .. 6 + N * 32 - 1) := (others => 0);
       begin
-         for I in 0 .. CLen - 1 loop
-            Data (I / EC_SL + 1, I mod EC_SL + 1) :=
-              Symbol (Cipher (Cipher'First + Stream_Element_Offset (I)));
+         for I in 0 .. Len - 1 loop
+            DB (I / EC_SL + 1, I mod EC_SL + 1) :=
+              Symbol (Data (Data'First + Stream_Element_Offset (I)));
          end loop;
-         Encode (EC_K, EC_M, EC_SL, Data, Parity);
+         Encode (K, M, EC_SL, DB, Parity);
 
          Create_Path (Dir);
-         Idx (0) := Byte (Shift_Right (Unsigned_32 (CLen), 24) and 16#FF#);
-         Idx (1) := Byte (Shift_Right (Unsigned_32 (CLen), 16) and 16#FF#);
-         Idx (2) := Byte (Shift_Right (Unsigned_32 (CLen), 8)  and 16#FF#);
-         Idx (3) := Byte (Unsigned_32 (CLen) and 16#FF#);
+         Idx (0) := Byte (Shift_Right (Unsigned_32 (Len), 24) and 16#FF#);
+         Idx (1) := Byte (Shift_Right (Unsigned_32 (Len), 16) and 16#FF#);
+         Idx (2) := Byte (Shift_Right (Unsigned_32 (Len), 8)  and 16#FF#);
+         Idx (3) := Byte (Unsigned_32 (Len) and 16#FF#);
+         Idx (4) := Byte (K);
+         Idx (5) := Byte (M);
 
-         for S in 1 .. EC_N loop
+         for S in 1 .. N loop
             declare
                Shard : Stream_Element_Array (1 .. EC_SL);
             begin
                for C in 1 .. EC_SL loop
                   Shard (Stream_Element_Offset (C)) :=
                     Stream_Element
-                      (if S <= EC_K then Data (S, C) else Parity (S - EC_K, C));
+                      (if S <= K then DB (S, C) else Parity (S - K, C));
                end loop;
                Write_File (Compose (Dir, Shard_Name (S)), Shard);
                declare
                   H : constant Digest := SHA256 (To_Bytes (Shard));
                begin
                   for I in 0 .. 31 loop
-                     Idx (4 + (S - 1) * 32 + I) := H (I);
+                     Idx (6 + (S - 1) * 32 + I) := H (I);
                   end loop;
                end;
             end;
          end loop;
          Write_File (Compose (Dir, "idx"), To_Stream (Idx));
       end;
-   end Store_Chunk;
+   end Store_Shards;
 
-   --  Read a chunk back, reconstructing from parity if up to M shards are
-   --  missing or fail their digest. Raises Corruption_Detected if unrecoverable.
-   function Read_Chunk (Root, Hex : String) return Stream_Element_Array is
-      Dir  : constant String := Object_Path (Root, Hex);
-      Idx  : constant Byte_Array := To_Bytes (Read_File (Compose (Dir, "idx")));
-      CLen : constant Natural :=
+   --  Read a blob back from its shard directory, reconstructing from parity if
+   --  up to M shards are missing or fail their digest. Raises Corruption_Detected
+   --  if unrecoverable.
+   function Read_Shards (Dir : String) return Stream_Element_Array is
+      Idx : constant Byte_Array := To_Bytes (Read_File (Compose (Dir, "idx")));
+      Len : constant Natural :=
         Natural (Shift_Left (Unsigned_32 (Idx (0)), 24)
                  or Shift_Left (Unsigned_32 (Idx (1)), 16)
                  or Shift_Left (Unsigned_32 (Idx (2)), 8)
                  or Unsigned_32 (Idx (3)));
+      K : constant Positive := Positive (Idx (4));
+      M : constant Positive := Positive (Idx (5));
+      N : constant Positive := K + M;
       Present : Present_Map := (others => False);
       Shards  : Shard_Block := (others => (others => 0));
       Data    : Data_Block;
       Ok      : Boolean;
    begin
-      for S in 1 .. EC_N loop
+      for S in 1 .. N loop
          declare
             File : constant String := Compose (Dir, Shard_Name (S));
          begin
             if Exists (File) then
                declare
-                  SB : constant Byte_Array := To_Bytes (Read_File (File));
+                  SB    : constant Byte_Array := To_Bytes (Read_File (File));
                   Valid : Boolean := SB'Length = EC_SL;
                begin
                   if Valid then
@@ -192,7 +202,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                         H : constant Digest := SHA256 (SB);
                      begin
                         for I in 0 .. 31 loop
-                           if H (I) /= Idx (4 + (S - 1) * 32 + I) then
+                           if H (I) /= Idx (6 + (S - 1) * 32 + I) then
                               Valid := False;
                            end if;
                         end loop;
@@ -209,21 +219,21 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
          end;
       end loop;
 
-      Reconstruct (EC_K, EC_M, EC_SL, Present, Shards, Data, Ok);
+      Reconstruct (K, M, EC_SL, Present, Shards, Data, Ok);
       if not Ok then
          raise Corruption_Detected;
       end if;
 
       declare
-         R : Stream_Element_Array (1 .. Stream_Element_Offset (CLen));
+         R : Stream_Element_Array (1 .. Stream_Element_Offset (Len));
       begin
-         for I in 0 .. CLen - 1 loop
+         for I in 0 .. Len - 1 loop
             R (Stream_Element_Offset (I + 1)) :=
               Stream_Element (Data (I / EC_SL + 1, I mod EC_SL + 1));
          end loop;
          return R;
       end;
-   end Read_Chunk;
+   end Read_Shards;
 
    function Put
      (Root : String; Key : Key_256; Data : Stream_Element_Array)
@@ -260,7 +270,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                      CD  : constant Digest    := SHA256 (Bytes);
                      Hex : constant Object_Id := To_Hex (CD);
                   begin
-                     Store_Chunk (Root, Hex, To_Stream (Bytes));
+                     Store_Shards (Object_Path (Root, Hex), To_Stream (Bytes));
                      for I in 0 .. 31 loop
                         Manifest (8 + C * 32 + I) := CD (I);
                      end loop;
@@ -273,7 +283,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
             MD   : constant Digest    := SHA256 (Manifest);
             MHex : constant Object_Id := To_Hex (MD);
          begin
-            Write_File (Manifest_Path (Root, MHex), To_Stream (Manifest));
+            Store_Shards (Manifest_Path (Root, MHex), To_Stream (Manifest));
             return MHex;
          end;
       end;
@@ -288,7 +298,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       return Stream_Element_Array
    is
       Manifest_Bytes : constant Byte_Array :=
-        To_Bytes (Read_File (Manifest_Path (Root, Id)));
+        To_Bytes (Read_Shards (Manifest_Path (Root, Id)));
    begin
       if To_Hex (SHA256 (Manifest_Bytes)) /= Id then
          raise Corruption_Detected;
@@ -309,7 +319,8 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                end loop;
                declare
                   Hex   : constant Object_Id := To_Hex (CD);
-                  Bytes : Byte_Array := To_Bytes (Read_Chunk (Root, Hex));
+                  Bytes : Byte_Array :=
+                    To_Bytes (Read_Shards (Object_Path (Root, Hex)));
                begin
                   if SHA256 (Bytes) /= CD then
                      raise Corruption_Detected;  --  cipher-text integrity
@@ -372,7 +383,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
          begin
             declare
                MB  : constant Byte_Array :=
-                 To_Bytes (Read_File (Manifest_Path (Root, String (Live (I)))));
+                 To_Bytes (Read_Shards (Manifest_Path (Root, String (Live (I)))));
                Len : constant Natural := Natural (Get_U64 (MB, 0));
                N   : constant Natural := (Len + Chunk_Size - 1) / Chunk_Size;
             begin
@@ -392,17 +403,19 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
          end;
       end loop;
 
-      --  Sweep manifests.
+      --  Sweep manifests (each is now a shard directory named by its id).
       if Exists (Compose (Root, "manifests")) then
          declare
             S : Search_Type;
             E : Directory_Entry_Type;
          begin
             Start_Search (S, Compose (Root, "manifests"), "",
-                          (Ordinary_File => True, others => False));
+                          (Directory => True, others => False));
             while More_Entries (S) loop
                Get_Next_Entry (S, E);
-               if not Reach_M.Contains (Simple_Name (E)) then
+               if Simple_Name (E) /= "." and then Simple_Name (E) /= ".."
+                 and then not Reach_M.Contains (Simple_Name (E))
+               then
                   Dead_M.Append (Full_Name (E));
                end if;
             end loop;
@@ -444,9 +457,10 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
          end;
       end if;
 
-      --  Delete after searching (avoid mutating dirs mid-iteration).
+      --  Delete after searching (avoid mutating dirs mid-iteration). Manifests
+      --  and chunks are both shard directories now.
       for P of Dead_M loop
-         Delete_File (P);
+         Delete_Tree (P);
          Reclaimed := Reclaimed + 1;
       end loop;
       for P of Dead_C loop
