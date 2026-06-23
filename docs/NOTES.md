@@ -44,9 +44,12 @@ finished, verified work. Keep it current as the trusted core grows.
 
 ## Future improvements (per docs/SPEC.md, deferred by scope)
 
-Trusted core (all four units implemented and verified): the remaining trusted-core
-work is the deferred Audit Chain extras: signed checkpoints (Ed25519 plus key
-management) and the standalone independent verifier tool.
+Trusted core (all four units implemented and verified): the standalone
+independent audit verifier is implemented (`verifier/`, `dezhan_verify <root>`):
+it re-parses `<root>/vault.state`, rebuilds the audit log, and re-checks it with
+the SPARK-proven `Verify_Chain`, sharing no code with the vault writer (a flipped
+field, forged hash, or re-linked entry all fail; exit 0 valid, 1 otherwise). The
+remaining Audit Chain extra is signed checkpoints (Ed25519 plus key management).
 
 Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
 

@@ -94,7 +94,8 @@ storage/        content-addressed storage engine (Ada)
 vault/          WORM orchestration over the trusted core (Ada)
 server/         HTTP/S3-style server + web UI (Ada, GNAT.Sockets)
 cli/            command-line client (Ada)
-auth/           AWS SigV4 signing core (Ada, on the verified HMAC-SHA256)
+auth/           AWS SigV4 signing, PBKDF2 KDF, key wrapping (Ada, on verified HMAC)
+verifier/       standalone audit-chain verifier (Ada, on the verified Verify_Chain)
 ```
 
 Licensed under Apache-2.0.

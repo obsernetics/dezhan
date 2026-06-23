@@ -1,0 +1,14 @@
+with "../trusted_core/dezhan_trusted_core.gpr";
+
+project Dezhan_Verify is
+
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj";
+   for Exec_Dir use "obj";
+   for Main use ("dezhan_verify.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-g");
+   end Compiler;
+
+end Dezhan_Verify;
