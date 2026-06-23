@@ -1,6 +1,8 @@
 with Interfaces;                  use Interfaces;
 with Ada.Directories;             use Ada.Directories;
 with Ada.Streams.Stream_IO;       use Ada.Streams.Stream_IO;
+with Ada.Containers.Indefinite_Ordered_Sets;
+with Ada.Containers.Indefinite_Vectors;
 with Dezhan.Trusted_Core.Hashing; use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Trusted_Core.Erasure; use Dezhan.Trusted_Core.Erasure;
 
@@ -350,5 +352,107 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       when others =>
          return False;
    end Verify;
+
+   package Hex_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+   package Str_Vecs is new Ada.Containers.Indefinite_Vectors (Natural, String);
+
+   procedure Collect_Garbage
+     (Root : String; Live : Id_List; Reclaimed : out Natural)
+   is
+      Reach_M : Hex_Sets.Set;   --  reachable manifest ids
+      Reach_C : Hex_Sets.Set;   --  reachable chunk hexes
+      Dead_M  : Str_Vecs.Vector;  --  manifest files to delete
+      Dead_C  : Str_Vecs.Vector;  --  chunk dirs to delete
+   begin
+      Reclaimed := 0;
+
+      --  Mark: each live manifest and the chunks it references.
+      for I in Live'Range loop
+         Reach_M.Include (String (Live (I)));
+         begin
+            declare
+               MB  : constant Byte_Array :=
+                 To_Bytes (Read_File (Manifest_Path (Root, String (Live (I)))));
+               Len : constant Natural := Natural (Get_U64 (MB, 0));
+               N   : constant Natural := (Len + Chunk_Size - 1) / Chunk_Size;
+            begin
+               for C in 0 .. N - 1 loop
+                  declare
+                     CD : Digest;
+                  begin
+                     for J in 0 .. 31 loop
+                        CD (J) := MB (8 + C * 32 + J);
+                     end loop;
+                     Reach_C.Include (String (To_Hex (CD)));
+                  end;
+               end loop;
+            end;
+         exception
+            when others => null;  --  manifest missing/unreadable: skip
+         end;
+      end loop;
+
+      --  Sweep manifests.
+      if Exists (Compose (Root, "manifests")) then
+         declare
+            S : Search_Type;
+            E : Directory_Entry_Type;
+         begin
+            Start_Search (S, Compose (Root, "manifests"), "",
+                          (Ordinary_File => True, others => False));
+            while More_Entries (S) loop
+               Get_Next_Entry (S, E);
+               if not Reach_M.Contains (Simple_Name (E)) then
+                  Dead_M.Append (Full_Name (E));
+               end if;
+            end loop;
+            End_Search (S);
+         end;
+      end if;
+
+      --  Sweep chunk directories (objects/<2hex>/<64hex>).
+      if Exists (Compose (Root, "objects")) then
+         declare
+            L1 : Search_Type;
+            D1 : Directory_Entry_Type;
+         begin
+            Start_Search (L1, Compose (Root, "objects"), "",
+                          (Directory => True, others => False));
+            while More_Entries (L1) loop
+               Get_Next_Entry (L1, D1);
+               if Simple_Name (D1) /= "." and then Simple_Name (D1) /= ".." then
+                  declare
+                     L2 : Search_Type;
+                     D2 : Directory_Entry_Type;
+                  begin
+                     Start_Search (L2, Full_Name (D1), "",
+                                   (Directory => True, others => False));
+                     while More_Entries (L2) loop
+                        Get_Next_Entry (L2, D2);
+                        if Simple_Name (D2) /= "."
+                          and then Simple_Name (D2) /= ".."
+                          and then not Reach_C.Contains (Simple_Name (D2))
+                        then
+                           Dead_C.Append (Full_Name (D2));
+                        end if;
+                     end loop;
+                     End_Search (L2);
+                  end;
+               end if;
+            end loop;
+            End_Search (L1);
+         end;
+      end if;
+
+      --  Delete after searching (avoid mutating dirs mid-iteration).
+      for P of Dead_M loop
+         Delete_File (P);
+         Reclaimed := Reclaimed + 1;
+      end loop;
+      for P of Dead_C loop
+         Delete_Tree (P);
+         Reclaimed := Reclaimed + 1;
+      end loop;
+   end Collect_Garbage;
 
 end Dezhan.Storage.Cas;

@@ -191,6 +191,20 @@ begin
              "multipart parts reassemble in order");
    end;
 
+   --  Garbage collection: backup-1 was deleted earlier, so its chunks are
+   --  orphaned; GC reclaims them while live objects (including the composite)
+   --  remain fully readable.
+   declare
+      Reclaimed : constant Natural := Collect_Garbage (V);
+   begin
+      Check (Reclaimed > 0, "GC reclaimed orphaned chunks/manifests");
+      Check (Equal (Get_Object (V, "persist-me"), Bytes ("durable payload")),
+             "live simple object still readable after GC");
+      Check (Equal (Get_Object (V, "doc-mp"), Bytes ("AAAABBBBCCCC")),
+             "live composite object still readable after GC");
+      Check (Collect_Garbage (V) = 0, "second GC reclaims nothing (idempotent)");
+   end;
+
    --  Background scrubbing: a clean sweep reports all objects intact; after a
    --  chunk is corrupted on disk, the scrub detects it.
    declare

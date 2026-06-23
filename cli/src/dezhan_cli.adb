@@ -22,11 +22,24 @@ procedure Dezhan_Cli is
    CRLF : constant String := ASCII.CR & ASCII.LF;
    LF   : constant String := (1 => ASCII.LF);
 
-   --  Demo SigV4 credential (must match the server's).
-   AKID    : constant String := "dezhanadmin";
-   Secret  : constant String := "dezhandemosecretkey0123456789";
-   Region  : constant String := "us-east-1";
-   Service : constant String := "s3";
+   --  SigV4 credential, taken from the environment (never hardcode a secret in
+   --  a client). The defaults match the server's demo credential so a local
+   --  POC works out of the box; set DEZHAN_ACCESS_KEY / DEZHAN_SECRET (and
+   --  optionally DEZHAN_REGION / DEZHAN_SERVICE) for any real use.
+   --
+   --  Region and Service are SigV4 credential-scope labels (date/region/service/
+   --  aws4_request) that the signing algorithm requires; every S3 client sends
+   --  them. For an on-prem vault they carry no geographic meaning, they only have
+   --  to match what the signature is computed over (the server uses the values
+   --  from the client's own Authorization header), so the defaults are arbitrary.
+   function Env (Name, Default : String) return String is
+     (if Ada.Environment_Variables.Exists (Name)
+      then Ada.Environment_Variables.Value (Name) else Default);
+
+   AKID    : constant String := Env ("DEZHAN_ACCESS_KEY", "dezhanadmin");
+   Secret  : constant String := Env ("DEZHAN_SECRET", "dezhandemosecretkey0123456789");
+   Region  : constant String := Env ("DEZHAN_REGION", "us-east-1");
+   Service : constant String := Env ("DEZHAN_SERVICE", "s3");
 
    function Env_Addr return String is
      (if Ada.Environment_Variables.Exists ("DEZHAN_ADDR")

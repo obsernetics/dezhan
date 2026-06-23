@@ -14,7 +14,8 @@ with Dezhan.Platform.Clock;
 
 package body Dezhan.Vault with SPARK_Mode => Off is
 
-   package CG renames Dezhan.Trusted_Core.Clock_Guard;
+   package CG  renames Dezhan.Trusted_Core.Clock_Guard;
+   package Cas renames Dezhan.Storage.Cas;
 
    Clock_Tolerance : constant Trusted_Time := 2;
 
@@ -463,6 +464,58 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       end loop;
       return R;
    end Scrub;
+
+   function Collect_Garbage (V : in out Vault_Type) return Natural is
+      Root : constant String := To_String (V.Self.Root);
+      Live : Id_Vectors.Vector;
+
+      procedure Add_Parts (Composite_Id : Object_Id) is
+         List : constant Stream_Element_Array := Get (Root, V.Self.Key, Composite_Id);
+         N    : constant Natural := Natural (List'Length) / 64;
+      begin
+         for P in 0 .. N - 1 loop
+            declare
+               Pid : Object_Id;
+            begin
+               for I in 0 .. 63 loop
+                  Pid (Pid'First + I) := Character'Val
+                    (Natural (List (List'First + Stream_Element_Offset (P * 64 + I))));
+               end loop;
+               Live.Append (Pid);
+            end;
+         end loop;
+      end Add_Parts;
+
+   begin
+      --  Live: every object's manifest id; composite part ids; and the parts of
+      --  any in-flight upload (so collection never reclaims work in progress).
+      for Cur in V.Self.Index.Iterate loop
+         declare
+            M : constant Meta := Meta_Maps.Element (Cur);
+         begin
+            Live.Append (M.Id);
+            if M.Composite then
+               Add_Parts (M.Id);
+            end if;
+         end;
+      end loop;
+      for Cur in V.Self.Uploads.Iterate loop
+         for Pid of Upload_Maps.Element (Cur).Parts loop
+            Live.Append (Pid);
+         end loop;
+      end loop;
+
+      declare
+         A : Cas.Id_List (1 .. Natural (Live.Length));
+         R : Natural;
+      begin
+         for I in A'Range loop
+            A (I) := Live (I - 1);
+         end loop;
+         Cas.Collect_Garbage (Root, A, R);
+         return R;
+      end;
+   end Collect_Garbage;
 
    function Delete_Object
      (V : in out Vault_Type; Name : String; Bypass : Boolean) return Boolean

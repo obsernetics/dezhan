@@ -9,7 +9,7 @@ project Dezhan_Server is
    for Main use ("dezhan_server.adb");
 
    package Compiler is
-      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-g");
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-g");
    end Compiler;
 
 end Dezhan_Server;

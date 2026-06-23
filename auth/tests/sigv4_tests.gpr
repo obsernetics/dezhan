@@ -8,7 +8,7 @@ project Sigv4_Tests is
    for Main use ("test_sigv4.adb");
 
    package Compiler is
-      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-g");
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-g");
    end Compiler;
 
 end Sigv4_Tests;

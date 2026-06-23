@@ -54,8 +54,9 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   detection, and encryption at source (ChaCha20, `Dezhan.Trusted_Core.Cipher`).
   Still to do: content-defined chunking, multi-level manifests for large objects
   (a single object is currently capped near 1 MB), compression, a background
-  garbage collection of unreferenced chunks (a deleted object's chunks are
-  currently orphaned, not reclaimed). Large objects are supported via multipart
+  garbage collection (implemented: `Vault.Collect_Garbage` reclaims chunks and
+  manifests not referenced by any live object, composite part, or in-flight
+  upload). Large objects are supported via multipart
   composite objects (below), so the ~1 MB single-Put manifest cap is no longer a
   hard limit; a native multi-level manifest for single Puts is still nice to have.
 - Multipart upload is implemented: `Vault.Create_Upload/Upload_Part/

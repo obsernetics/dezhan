@@ -71,6 +71,11 @@ package Dezhan.Vault with SPARK_Mode => Off is
    --  (detects silent corruption / bit rot). Read-only; needs no key.
    function Scrub (V : Vault_Type) return Scrub_Report;
 
+   --  Reclaim chunks and manifests not referenced by any live object (including
+   --  composite parts) or in-flight upload. Returns the number of manifests and
+   --  chunk directories removed.
+   function Collect_Garbage (V : in out Vault_Type) return Natural;
+
    --  Attempt to delete Name. Returns True iff retention permitted it (Bypass
    --  only helps in Governance mode). The outcome is recorded in the audit chain.
    function Delete_Object

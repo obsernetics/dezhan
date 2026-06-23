@@ -9,7 +9,7 @@ library project Dezhan_Trusted_Core is
    package Compiler is
       for Default_Switches ("Ada") use
         ("-gnat2022",   --  Ada 2022
-         "-gnatwa",     --  all warnings
+         "-gnatwa", "-gnatwJ",     --  all warnings
          "-gnata",      --  enable assertions / contracts at runtime
          "-g");
    end Compiler;

@@ -10,7 +10,7 @@ library project Dezhan_Vault is
    for Library_Kind use "static";
 
    package Compiler is
-      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-g");
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-g");
    end Compiler;
 
 end Dezhan_Vault;

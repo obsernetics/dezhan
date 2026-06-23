@@ -11,7 +11,7 @@ project Tests is
       "test_cipher.adb", "test_hmac.adb");
 
    package Compiler is
-      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnata", "-g");
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-gnata", "-g");
    end Compiler;
 
 end Tests;

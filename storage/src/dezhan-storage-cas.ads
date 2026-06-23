@@ -46,4 +46,13 @@ package Dezhan.Storage.Cas with SPARK_Mode => Off is
    --  cipher-text integrity, so it needs no key.
    function Verify (Root : String; Id : Object_Id) return Boolean;
 
+   --  A list of live object ids (manifest ids) to retain during collection.
+   type Id_List is array (Positive range <>) of Object_Id;
+
+   --  Garbage-collect: delete every manifest and chunk not reachable from a live
+   --  id. Shared chunks are retained while any live object references them.
+   --  Reclaimed counts the manifests and chunk directories removed.
+   procedure Collect_Garbage
+     (Root : String; Live : Id_List; Reclaimed : out Natural);
+
 end Dezhan.Storage.Cas;
