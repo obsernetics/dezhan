@@ -51,15 +51,21 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   per-object keys, and key wrapping are future work. The store takes a key from
   the caller; tests use a fixed key and a zero nonce with a per-chunk counter
   (a per-object random nonce is the intended hardening).
-- S3-compatible vault API: PUT/GET/HEAD/LIST, multipart, AWS SigV4, Object Lock.
+- Vault + HTTP API + CLI + web UI: implemented as an end-to-end POC
+  (`Dezhan.Vault`, `dezhan_server`, `dezhan_cli`). WORM enforced, audit chain,
+  health, Prometheus metrics, minimal UI. Still to do: durable metadata
+  persistence (the vault index and audit chain are in memory, lost on restart),
+  AWS SigV4 authentication, multipart uploads, bucket/LIST semantics, concurrency
+  (the server is single-threaded), structured logs, and real key management (a
+  fixed demo key is used).
 - General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays
   the headline. Both modes share the S3 API, storage engine, audit chain, and
   scrubbing; only Immutable buckets use the retention state machine.
 - Local auth realm, RBAC, quorum approvals, API tokens, service accounts.
-- CLI and minimal web UI.
-- Observability: Prometheus metrics, structured logs, health endpoints.
-- Air-gap features: sync windows, seal operation, one-way ingest, technology
+- Observability: structured logs (health endpoints and Prometheus metrics exist).
+- Air-gap features: sync windows, seal operation (the clock guard already latches
+  a seal; wiring it to reject writes is pending), one-way ingest, technology
   break.
 - Hardware-backed time anchor (TPM or secure RTC) behind the existing pluggable
   seam in the Clock Guard.

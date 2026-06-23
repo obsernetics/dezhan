@@ -1,0 +1,14 @@
+with "../vault/dezhan_vault.gpr";
+
+project Dezhan_Server is
+
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj";
+   for Exec_Dir use "obj";
+   for Main use ("dezhan_server.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-g");
+   end Compiler;
+
+end Dezhan_Server;

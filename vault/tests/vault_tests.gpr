@@ -1,0 +1,14 @@
+with "../dezhan_vault.gpr";
+
+project Vault_Tests is
+
+   for Source_Dirs use (".");
+   for Object_Dir use "obj";
+   for Exec_Dir use "obj";
+   for Main use ("test_vault.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-g");
+   end Compiler;
+
+end Vault_Tests;

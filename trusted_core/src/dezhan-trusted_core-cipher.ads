@@ -18,7 +18,6 @@ package Dezhan.Trusted_Core.Cipher with SPARK_Mode is
      (Key     : Key_256;
       Nonce   : Nonce_96;
       Counter : Unsigned_32;
-      Data    : in out Byte_Array)
-     with Pre => Data'Length = 0 or else Data'Last < Natural'Last;
+      Data    : in out Byte_Array);
 
 end Dezhan.Trusted_Core.Cipher;

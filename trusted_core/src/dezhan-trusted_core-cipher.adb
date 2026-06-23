@@ -18,13 +18,23 @@ package body Dezhan.Trusted_Core.Cipher with SPARK_Mode is
       S (C) := S (C) + S (D);  S (B) := Rotate_Left (S (B) xor S (C), 7);
    end Quarter_Round;
 
+   --  A contract (even a trivial one) stops gnatprove from inlining the whole
+   --  ChaCha20 block computation into XCrypt's byte loop, which otherwise makes
+   --  XCrypt's proof explode. Block is proved on its own; XCrypt treats its
+   --  result opaquely (a Keystream, indices 0 .. 63).
+   function Block
+     (Key     : Key_256;
+      Nonce   : Nonce_96;
+      Counter : Unsigned_32) return Keystream
+     with Post => True;
+
    function Block
      (Key     : Key_256;
       Nonce   : Nonce_96;
       Counter : Unsigned_32) return Keystream
    is
       St : Words := (others => 0);
-      Wk : Words := (others => 0);
+      Wk : Words;
       KS : Keystream := (others => 0);
    begin
       St (0) := 16#61707865#;
@@ -75,24 +85,19 @@ package body Dezhan.Trusted_Core.Cipher with SPARK_Mode is
       Data    : in out Byte_Array)
    is
       Ctr : Unsigned_32 := Counter;
-      Pos : Natural := Data'First;
+      Off : Natural := 0;                      --  offset within the current block
+      KS  : Keystream := Block (Key, Nonce, Ctr);
    begin
-      while Pos <= Data'Last loop
-         pragma Loop_Invariant (Pos >= Data'First);
-         pragma Loop_Invariant (Pos <= Data'Last);
-         pragma Loop_Variant (Decreases => Data'Last - Pos);
-         declare
-            KS        : constant Keystream := Block (Key, Nonce, Ctr);
-            Remaining : constant Natural   := Data'Last - Pos + 1;
-            This      : constant Natural   :=
-              (if Remaining < 64 then Remaining else 64);
-         begin
-            for J in 0 .. This - 1 loop
-               Data (Pos + J) := Data (Pos + J) xor KS (J);
-            end loop;
-            Pos := Pos + This;
-         end;
-         Ctr := Ctr + 1;
+      for I in Data'Range loop
+         pragma Loop_Invariant (Off <= 63);
+         Data (I) := Data (I) xor KS (Off);
+         if Off = 63 then
+            Off := 0;
+            Ctr := Ctr + 1;
+            KS  := Block (Key, Nonce, Ctr);
+         else
+            Off := Off + 1;
+         end if;
       end loop;
    end XCrypt;
 
