@@ -52,6 +52,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Clock      : CG.Guard_State;
       Started    : Boolean := False; --  clock baseline taken from the first tick
       Op_Sealed  : Boolean := False; --  operator-initiated read-only seal
+      Last_Boot  : Unbounded_String := Null_Unbounded_String;  --  kernel boot id
       Index      : Meta_Maps.Map;
       Log        : Log_Vectors.Vector;
       Uploads    : Upload_Maps.Map;  --  in-flight multipart uploads (transient)
@@ -175,6 +176,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Put_Line (F, "CLOCK " & Trusted_Time'Image (CG.Now (V.Self.Clock))
                    & (if CG.Is_Sealed (V.Self.Clock) then " 1" else " 0")
                    & (if V.Self.Op_Sealed then " 1" else " 0"));
+      Put_Line (F, "BOOT " & To_String (V.Self.Last_Boot));
       for Cur in V.Self.Index.Iterate loop
          declare
             Name : constant String := Meta_Maps.Key (Cur);
@@ -224,6 +226,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                   Sealed    => Field (Line, 3) = "1");
                V.Self.Op_Sealed := Field (Line, 4) = "1";
                V.Self.Started := False;  --  re-baseline monotonic on next tick
+            elsif Tag = "BOOT" then
+               V.Self.Last_Boot := To_Unbounded_String (Field (Line, 2));
             elsif Tag = "OBJ" then
                V.Self.Index.Include
                  (Hex_To_Str (Field (Line, 2)),
@@ -573,9 +577,16 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    end Tick_Clock;
 
    procedure Tick_From_System (V : in out Vault_Type) is
-      Sample : constant CG.Clock_Sample := Dezhan.Platform.Clock.Sample;
+      Sample  : constant CG.Clock_Sample := Dezhan.Platform.Clock.Sample;
+      Boot    : constant String := Dezhan.Platform.Clock.Boot_Id;
+      Old     : constant String := To_String (V.Self.Last_Boot);
+      Rebooted : constant Boolean := Old'Length > 0 and then Old /= Boot;
    begin
-      Tick_Clock (V, Sample.Mono, Sample.Realtime, Sample.Boot_Changed);
+      V.Self.Last_Boot := To_Unbounded_String (Boot);
+      Tick_Clock (V, Sample.Mono, Sample.Realtime, Boot_Changed => Rebooted);
+      if Old /= Boot then
+         Save (V);  --  persist the (new) boot id on first observation or a reboot
+      end if;
    end Tick_From_System;
 
    procedure Seal (V : in out Vault_Type) is

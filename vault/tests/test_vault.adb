@@ -7,6 +7,7 @@ with Ada.Streams.Stream_IO;
 with Dezhan.Trusted_Core.Times;     use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Retention; use Dezhan.Trusted_Core.Retention;
 with Dezhan.Trusted_Core.Cipher;    use Dezhan.Trusted_Core.Cipher;
+with Dezhan.Platform.Clock;
 with Dezhan.Vault;                  use Dezhan.Vault;
 
 --  End-to-end POC test: the vault enforces WORM via the trusted core. A
@@ -240,6 +241,10 @@ begin
       Open (V3, Root, Key);
       Check (Sealed (V3), "seal persists across reopen");
    end;
+
+   --  Reboot detection: the kernel boot id is readable (drives Boot_Changed).
+   Check (Dezhan.Platform.Clock.Boot_Id'Length > 0,
+          "kernel boot id is readable for reboot detection");
 
    New_Line;
    if Failures = 0 then

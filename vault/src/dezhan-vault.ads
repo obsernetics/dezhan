@@ -9,8 +9,10 @@
 --  with a bypass; every operation is recorded in the audit chain; trusted time
 --  comes from the clock guard so a manipulated system clock cannot expire a lock.
 --
---  Regular Ada (SPARK_Mode Off): it orchestrates verified components. Metadata is
---  in memory for the POC; durable metadata persistence is future work.
+--  Regular Ada (SPARK_Mode Off): it orchestrates verified components. Metadata
+--  (object index, audit chain, clock high-water mark, seal, boot id) is persisted
+--  to <root>/vault.state on each mutation and reloaded on open, so the vault
+--  survives a restart; a reboot is detected via the kernel boot id.
 with Ada.Streams; use Ada.Streams;
 with Dezhan.Trusted_Core.Times;       use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Retention;   use Dezhan.Trusted_Core.Retention;

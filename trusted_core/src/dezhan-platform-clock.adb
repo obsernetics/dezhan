@@ -1,4 +1,5 @@
 with Interfaces.C;
+with Ada.Text_IO;
 with Dezhan.Trusted_Core.Times;       use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Clock_Guard; use Dezhan.Trusted_Core.Clock_Guard;
 
@@ -36,9 +37,30 @@ package body Dezhan.Platform.Clock with SPARK_Mode => Off is
 
    function Sample return Clock_Sample is
    begin
+      --  Boot_Changed is determined by the caller comparing Boot_Id across
+      --  restarts; within one process the monotonic clock never resets.
       return (Mono         => Seconds (CLOCK_BOOTTIME),
               Realtime     => Seconds (CLOCK_REALTIME),
               Boot_Changed => False);
    end Sample;
+
+   function Boot_Id return String is
+      use Ada.Text_IO;
+      F : File_Type;
+   begin
+      Open (F, In_File, "/proc/sys/kernel/random/boot_id");
+      declare
+         Line : constant String := Get_Line (F);
+      begin
+         Close (F);
+         return Line;
+      end;
+   exception
+      when others =>
+         if Is_Open (F) then
+            Close (F);
+         end if;
+         return "";
+   end Boot_Id;
 
 end Dezhan.Platform.Clock;
