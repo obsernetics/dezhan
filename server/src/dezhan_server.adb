@@ -32,6 +32,8 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Streams;          use Ada.Streams;
 with Ada.Exceptions;       use Ada.Exceptions;
 with Ada.Environment_Variables;
+with Ada.Strings.Hash;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with GNAT.Sockets;         use GNAT.Sockets;
 with Dezhan.Trusted_Core.Times;     use Dezhan.Trusted_Core.Times;
 with Dezhan.Trusted_Core.Retention; use Dezhan.Trusted_Core.Retention;
@@ -55,13 +57,42 @@ procedure Dezhan_Server is
      (if Ada.Environment_Variables.Exists (Name)
       then Ada.Environment_Variables.Value (Name) else Default);
 
-   --  SigV4 credential (single demo account) and whether unsigned requests to
-   --  /v are rejected. Real multi-account credential management is future work.
+   --  The seeded demo SigV4 account (more can be loaded from a credentials
+   --  file), and whether unsigned requests to /v are rejected.
    Access_Key   : constant String  := Env ("DEZHAN_ACCESS_KEY", "dezhanadmin");
    Secret_Key   : constant String  := Env ("DEZHAN_SECRET", "dezhandemosecretkey0123456789");
    Require_Auth : constant Boolean  := Ada.Environment_Variables.Exists ("DEZHAN_REQUIRE_AUTH");
 
    type Auth_Status is (Anon, Valid, Invalid, Missing);
+
+   --  Credential store: access key id -> secret. Seeded with the demo account;
+   --  more can be added via a credentials file (lines "akid secret"), path from
+   --  DEZHAN_CREDENTIALS or <root>/credentials.
+   package Cred_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => String,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   Credentials : Cred_Maps.Map;
+
+   procedure Load_Credentials (Path : String) is
+      F : File_Type;
+   begin
+      Open (F, In_File, Path);
+      while not End_Of_File (F) loop
+         declare
+            Line : constant String := Get_Line (F);
+            Sp   : constant Natural := Index (Line, " ");
+         begin
+            if Sp > 0 then
+               Credentials.Include
+                 (Trim (Line (Line'First .. Sp - 1), Both),
+                  Trim (Line (Sp + 1 .. Line'Last), Both));
+            end if;
+         end;
+      end loop;
+      Close (F);
+   exception
+      when others => null;  --  no/unreadable file: rely on the seeded demo cred
+   end Load_Credentials;
 
    V : Vault_Type;
 
@@ -269,7 +300,7 @@ procedure Dezhan_Server is
          CH      : Unbounded_String;
          N       : Natural := 1;
       begin
-         if AKID /= Access_Key then
+         if not Credentials.Contains (AKID) then
             return Invalid;
          end if;
          loop
@@ -282,7 +313,8 @@ procedure Dezhan_Server is
             end;
          end loop;
          if Dezhan.Sigv4.Signature_For
-              (Secret_Key, Method, Path0, Dezhan.Sigv4.Canonical_Query (Query),
+              (Credentials.Element (AKID), Method, Path0,
+               Dezhan.Sigv4.Canonical_Query (Query),
                To_String (CH), SH, Payload_Hash,
                Header (Head, "x-amz-date"), SDate, Region, Service) = Sig
          then
@@ -485,6 +517,8 @@ procedure Dezhan_Server is
    Status : Selector_Status;
 begin
    Open (V, Root, Key);
+   Credentials.Include (Access_Key, Secret_Key);   --  seed the demo account
+   Load_Credentials (Env ("DEZHAN_CREDENTIALS", Root & "/credentials"));
    Initialize;
    Create_Socket (Server);
    Set_Socket_Option (Server, Socket_Level, (Reuse_Address, True));

@@ -93,10 +93,12 @@ and enforced: the signing core (`Dezhan.Sigv4`, on the RFC 4231-validated
 example; the server verifies an `AWS4-HMAC-SHA256` Authorization header on `/v`
 requests against a demo credential (anonymous allowed unless
 `DEZHAN_REQUIRE_AUTH` is set, then 401; bad signature 403), and the CLI `sput`
-command signs requests. Remaining: a multi-account credential store, query-string
-canonicalization, and interop validation against real S3 clients (Veeam/restic),
-whose exact canonicalization should be confirmed end to end.
-  structured logs, and real key management (a fixed demo key is used).
+command signs requests. A multi-account credential store (a "akid secret"
+credentials file plus the seeded demo account) and query-string canonicalization
+(so signed multipart verifies) are implemented. Remaining: interop validation
+against real S3 clients (Veeam/restic), whose exact canonicalization should be
+confirmed end to end, and management of the vault's data-encryption key (a fixed
+demo key is used at rest).
 - General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays
   the headline. Both modes share the S3 API, storage engine, audit chain, and
