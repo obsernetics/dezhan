@@ -12,7 +12,9 @@ with 0 unproved checks:
 
 - **Retention State Machine.** Retention can be extended but never shortened. In
   compliance mode a retained object cannot be deleted before expiry, with no
-  override; governance mode allows only an audited bypass.
+  override; governance mode allows only an audited bypass. A legal hold blocks
+  deletion absolutely (even past expiry, even under a governance bypass) until
+  released.
 - **Clock Integrity Guard.** Trusted time advances only by a monotonic clock and
   is provably independent of the untrusted system clock, so moving the system
   clock cannot expire a lock.
@@ -22,15 +24,17 @@ with 0 unproved checks:
 - **Erasure Coding.** Systematic Reed-Solomon over GF(2^8). Any K of the N shards
   reconstruct the original data; validated by an exhaustive round-trip test.
 
-This completes the SPARK-verified trusted core (232 checks, 0 unproved).
+This completes the SPARK-verified trusted core (270 checks, 0 unproved).
 
 Platform layer (regular Ada), an end-to-end POC on top of the verified core:
 
 - **Storage** (`Dezhan.Storage.Cas`): content-addressed chunks (SHA-256), a
-  Merkle-style manifest, deduplication, encryption at source (ChaCha20), and
-  Reed-Solomon erasure coding (each chunk is stored as 4 data + 2 parity shards),
-  so up to two lost or corrupt shards per chunk are reconstructed on read and
-  unrecoverable loss is detected.
+  Merkle-style manifest, deduplication, in-tree DEFLATE compression
+  (`Dezhan.Storage.Deflate`, RFC 1951, no external dependency; applied before
+  encryption, smaller of compressed/stored kept), encryption at source
+  (ChaCha20), and Reed-Solomon erasure coding (each chunk is stored as 4 data +
+  2 parity shards), so up to two lost or corrupt shards per chunk are
+  reconstructed on read and unrecoverable loss is detected.
 - **Vault** (`Dezhan.Vault`): ties storage + retention + clock + audit into WORM
   behavior. A compliance-locked object cannot be deleted before expiry (even with
   a bypass), a manipulated clock cannot expire it, and every action is recorded
@@ -38,7 +42,8 @@ Platform layer (regular Ada), an end-to-end POC on top of the verified core:
 - **Server** (`dezhan_server`): a small HTTP API (PUT/GET/HEAD/DELETE under
   `/v/<name>`, multipart via `?uploads` / `?uploadId=`, `GET /v` to list,
   `POST /admin/seal` for read-only mode,
-  `POST /admin/scrub`, plus `/healthz`, Prometheus `/metrics`, and a minimal web
+  `POST /admin/scrub`, `POST /admin/legal-hold?name=X&on=1|0` to place or release
+  a legal hold, plus `/healthz`, Prometheus `/metrics`, and a minimal web
   UI at `/`), built on `GNAT.Sockets` with no external dependency. It also runs a
   background integrity scrub during idle periods (single-threaded, via a socket
   selector timeout). `/v` requests are authenticated with AWS SigV4 when an

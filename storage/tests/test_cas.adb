@@ -1,4 +1,5 @@
 pragma Ada_2022;
+with Interfaces;            use Interfaces;
 with Ada.Text_IO;           use Ada.Text_IO;
 with Ada.Command_Line;      use Ada.Command_Line;
 with Ada.Streams;           use Ada.Streams;
@@ -91,7 +92,11 @@ procedure Test_Cas is
       17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32);
    Wrong_Key : constant Key_256 := (others => 99);
 
-   Data : Stream_Element_Array (1 .. 10_000);   --  spans three 4096-byte chunks
+   --  High-entropy (incompressible) so it stays stored uncompressed across
+   --  three full 4096-byte chunks, K=4 + 2 parity = 6 shards each. That layout
+   --  is what the shard-loss checks below depend on.
+   Data : Stream_Element_Array (1 .. 10_000);
+   Lcg  : Unsigned_32 := 16#1234_5678#;
 
 begin
    if Exists (Root) then
@@ -100,16 +105,26 @@ begin
    Initialize (Root);
 
    for I in Data'Range loop
-      Data (I) := Stream_Element ((Integer (I) * 7) mod 256);
+      Lcg := Lcg * 1_103_515_245 + 12_345;
+      Data (I) := Stream_Element (Shift_Right (Lcg, 16) and 16#FF#);
    end loop;
 
    declare
       Id    : constant Object_Id := Put (Root, Key, Data);
       Back  : constant Stream_Element_Array := Get (Root, Key, Id);
-      Wrong : constant Stream_Element_Array := Get (Root, Wrong_Key, Id);
+
+      --  A wrong key decrypts to garbage; since objects are compressed before
+      --  encryption, that garbage usually fails to inflate (Format_Error). Either
+      --  way the original is not recovered.
+      function Wrong_Key_Recovers return Boolean is
+      begin
+         return Equal (Get (Root, Wrong_Key, Id), Data);
+      exception
+         when others => return False;
+      end Wrong_Key_Recovers;
    begin
       Check (Equal (Back, Data), "round-trip with the right key returns the original");
-      Check (not Equal (Wrong, Data), "wrong key does not recover the data (encrypted at rest)");
+      Check (not Wrong_Key_Recovers, "wrong key does not recover the data (encrypted at rest)");
       Check (Verify (Root, Id), "verify reports the object intact");
       Check (Put (Root, Key, Data) = Id, "same bytes and key yield the same id");
 

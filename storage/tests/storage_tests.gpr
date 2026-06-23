@@ -5,7 +5,7 @@ project Storage_Tests is
    for Source_Dirs use (".");
    for Object_Dir use "obj";
    for Exec_Dir use "obj";
-   for Main use ("test_cas.adb");
+   for Main use ("test_cas.adb", "test_deflate.adb", "deflate_tool.adb");
 
    package Compiler is
       for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-g");

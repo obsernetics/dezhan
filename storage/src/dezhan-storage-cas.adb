@@ -7,12 +7,20 @@ with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Containers.Indefinite_Vectors;
 with Dezhan.Trusted_Core.Hashing; use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Trusted_Core.Erasure; use Dezhan.Trusted_Core.Erasure;
+with Dezhan.Storage.Deflate;
 
 package body Dezhan.Storage.Cas with SPARK_Mode => Off is
 
    Hex_Digits : constant String   := "0123456789abcdef";
    Zero_Nonce : constant Nonce_96 := (others => 0);
    Zero_Key   : constant Key_256  := (others => 0);
+
+   --  Manifest header layout (bytes), before the chunk-digest table:
+   --    0 ..  7  payload length  (bytes actually chunked and stored)
+   --    8 .. 15  original length (plaintext length the caller put)
+   --   16         compression flag: 0 = stored as-is, 1 = DEFLATE
+   --  Chunk i's 32-byte cipher-text digest starts at Hdr + i * 32.
+   Hdr : constant := 17;
 
    --  Reed-Solomon shard layout: a blob (chunk or manifest) is split into K data
    --  shards of EC_SL bytes (one per EC_SL of length) plus EC_M parity shards.
@@ -58,6 +66,28 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       end loop;
       return R;
    end To_Stream;
+
+   function To_Defl (S : Stream_Element_Array) return Deflate.Buffer is
+      R : Deflate.Buffer (0 .. Natural (S'Length) - 1);
+      J : Natural := 0;
+   begin
+      for I in S'Range loop
+         R (J) := Deflate.Octet (S (I));
+         J := J + 1;
+      end loop;
+      return R;
+   end To_Defl;
+
+   function From_Defl (B : Deflate.Buffer) return Stream_Element_Array is
+      R : Stream_Element_Array (1 .. Stream_Element_Offset (B'Length));
+      J : Stream_Element_Offset := 1;
+   begin
+      for I in B'Range loop
+         R (J) := Stream_Element (B (I));
+         J := J + 1;
+      end loop;
+      return R;
+   end From_Defl;
 
    procedure Write_File (Path : String; Data : Stream_Element_Array) is
       F : File_Type;
@@ -239,52 +269,65 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
      (Root : String; Key : Key_256; Data : Stream_Element_Array)
       return Object_Id
    is
-      Len      : constant Natural := Natural (Data'Length);
-      N_Chunks : constant Natural := (Len + Chunk_Size - 1) / Chunk_Size;
+      Orig_Len : constant Natural := Natural (Data'Length);
+      --  Compress the whole object first; keep the smaller of deflate/stored.
+      Comp     : constant Deflate.Buffer := Deflate.Deflate (To_Defl (Data));
+      Compress : constant Boolean := Comp'Length < Orig_Len;
    begin
-      if 8 + N_Chunks * 32 > Max_Message then
-         raise Object_Too_Large;
-      end if;
-
       declare
-         Manifest : Byte_Array (0 .. 8 + N_Chunks * 32 - 1) := (others => 0);
+         Payload  : constant Stream_Element_Array :=
+           (if Compress then From_Defl (Comp) else Data);
+         P_Len    : constant Natural := Natural (Payload'Length);
+         N_Chunks : constant Natural := (P_Len + Chunk_Size - 1) / Chunk_Size;
       begin
-         Put_U64 (Manifest, 0, Unsigned_64 (Len));
-
-         for C in 0 .. N_Chunks - 1 loop
-            declare
-               First : constant Stream_Element_Offset :=
-                 Data'First + Stream_Element_Offset (C * Chunk_Size);
-               Last  : Stream_Element_Offset :=
-                 First + Stream_Element_Offset (Chunk_Size) - 1;
-            begin
-               if Last > Data'Last then
-                  Last := Data'Last;
-               end if;
-               declare
-                  Bytes : Byte_Array := To_Bytes (Data (First .. Last));
-               begin
-                  --  Encrypt at source, then address and store the cipher text.
-                  XCrypt (Key, Zero_Nonce, Counter_For (C), Bytes);
-                  declare
-                     CD  : constant Digest    := SHA256 (Bytes);
-                     Hex : constant Object_Id := To_Hex (CD);
-                  begin
-                     Store_Shards (Object_Path (Root, Hex), To_Stream (Bytes));
-                     for I in 0 .. 31 loop
-                        Manifest (8 + C * 32 + I) := CD (I);
-                     end loop;
-                  end;
-               end;
-            end;
-         end loop;
+         if Hdr + N_Chunks * 32 > Max_Message then
+            raise Object_Too_Large;
+         end if;
 
          declare
-            MD   : constant Digest    := SHA256 (Manifest);
-            MHex : constant Object_Id := To_Hex (MD);
+            Manifest : Byte_Array (0 .. Hdr + N_Chunks * 32 - 1) :=
+              (others => 0);
          begin
-            Store_Shards (Manifest_Path (Root, MHex), To_Stream (Manifest));
-            return MHex;
+            Put_U64 (Manifest, 0, Unsigned_64 (P_Len));
+            Put_U64 (Manifest, 8, Unsigned_64 (Orig_Len));
+            Manifest (16) := (if Compress then 1 else 0);
+
+            for C in 0 .. N_Chunks - 1 loop
+               declare
+                  First : constant Stream_Element_Offset :=
+                    Payload'First + Stream_Element_Offset (C * Chunk_Size);
+                  Last  : Stream_Element_Offset :=
+                    First + Stream_Element_Offset (Chunk_Size) - 1;
+               begin
+                  if Last > Payload'Last then
+                     Last := Payload'Last;
+                  end if;
+                  declare
+                     Bytes : Byte_Array := To_Bytes (Payload (First .. Last));
+                  begin
+                     --  Encrypt at source, then address and store cipher text.
+                     XCrypt (Key, Zero_Nonce, Counter_For (C), Bytes);
+                     declare
+                        CD  : constant Digest    := SHA256 (Bytes);
+                        Hex : constant Object_Id := To_Hex (CD);
+                     begin
+                        Store_Shards
+                          (Object_Path (Root, Hex), To_Stream (Bytes));
+                        for I in 0 .. 31 loop
+                           Manifest (Hdr + C * 32 + I) := CD (I);
+                        end loop;
+                     end;
+                  end;
+               end;
+            end loop;
+
+            declare
+               MD   : constant Digest    := SHA256 (Manifest);
+               MHex : constant Object_Id := To_Hex (MD);
+            begin
+               Store_Shards (Manifest_Path (Root, MHex), To_Stream (Manifest));
+               return MHex;
+            end;
          end;
       end;
    end Put;
@@ -305,9 +348,10 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       end if;
 
       declare
-         Len      : constant Natural := Natural (Get_U64 (Manifest_Bytes, 0));
-         N_Chunks : constant Natural := (Len + Chunk_Size - 1) / Chunk_Size;
-         Result   : Stream_Element_Array (1 .. Stream_Element_Offset (Len));
+         P_Len    : constant Natural := Natural (Get_U64 (Manifest_Bytes, 0));
+         Compress : constant Boolean := Manifest_Bytes (16) = 1;
+         N_Chunks : constant Natural := (P_Len + Chunk_Size - 1) / Chunk_Size;
+         Payload  : Stream_Element_Array (1 .. Stream_Element_Offset (P_Len));
          Pos      : Stream_Element_Offset := 1;
       begin
          for C in 0 .. N_Chunks - 1 loop
@@ -315,7 +359,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                CD : Digest;
             begin
                for I in 0 .. 31 loop
-                  CD (I) := Manifest_Bytes (8 + C * 32 + I);
+                  CD (I) := Manifest_Bytes (Hdr + C * 32 + I);
                end loop;
                declare
                   Hex   : constant Object_Id := To_Hex (CD);
@@ -328,7 +372,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                   if Reassemble then
                      XCrypt (Key, Zero_Nonce, Counter_For (C), Bytes);  --  decrypt
                      for I in Bytes'Range loop
-                        Result (Pos + Stream_Element_Offset (I)) :=
+                        Payload (Pos + Stream_Element_Offset (I)) :=
                           Stream_Element (Bytes (I));
                      end loop;
                   end if;
@@ -337,10 +381,12 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
             end;
          end loop;
 
-         if Reassemble then
-            return Result;
-         else
+         if not Reassemble then
             return (1 .. 0 => 0);
+         elsif Compress then
+            return From_Defl (Deflate.Inflate (To_Defl (Payload)));
+         else
+            return Payload;
          end if;
       end;
    end Load;
@@ -392,7 +438,7 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                      CD : Digest;
                   begin
                      for J in 0 .. 31 loop
-                        CD (J) := MB (8 + C * 32 + J);
+                        CD (J) := MB (Hdr + C * 32 + J);
                      end loop;
                      Reach_C.Include (String (To_Hex (CD)));
                   end;

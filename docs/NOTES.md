@@ -54,8 +54,14 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   (`Dezhan.Storage.Cas`): fixed-size chunking, SHA-256 content addressing,
   deduplication, Merkle-style manifest, integrity verification, corruption
   detection, and encryption at source (ChaCha20, `Dezhan.Trusted_Core.Cipher`).
+  Compression is implemented: an in-tree DEFLATE codec
+  (`Dezhan.Storage.Deflate`, RFC 1951, no external dependency) compresses each
+  object before encryption; the manifest records the chosen mode and original
+  length, and Put keeps the smaller of compressed/stored. The codec is validated
+  for round-trip and for wire compatibility with zlib (raw, wbits = -15) in both
+  directions.
   Still to do: content-defined chunking, multi-level manifests for large objects
-  (a single object is currently capped near 1 MB), compression, a background
+  (a single object is currently capped near 1 MB), a background
   garbage collection (implemented: `Vault.Collect_Garbage` reclaims chunks and
   manifests not referenced by any live object, composite part, or in-flight
   upload). Large objects are supported via multipart
