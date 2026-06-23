@@ -192,9 +192,10 @@ Requirements:
 
 * Deduplication
 * Compression
-* Encryption at source
+* Authenticated encryption at source (encrypt-then-MAC, key separation)
+* Key derivation from a passphrase (PBKDF2-HMAC-SHA256, per-vault salt)
 * Integrity verification
-* Background scrubbing
+* Background scrubbing (self-heal from parity; quarantine the unrepairable)
 * Merkle manifests
 
 Objects are immutable.
@@ -275,6 +276,27 @@ Mitigation:
 Merkle verification.
 Periodic scrubbing.
 Erasure coding.
+```
+
+---
+
+### Stolen Media or Wrong Key
+
+Attack:
+
+```text
+Disks/backups exfiltrated, or an object substituted/tampered at rest.
+```
+
+Mitigation:
+
+```text
+Authenticated encryption: encrypt-then-MAC with key separation.
+Each object carries a keyed HMAC-SHA256 tag over its manifest digest,
+verified before any plaintext is produced, so a wrong key or any
+tampering is cryptographically rejected (not returned as garbage).
+The key is derived from a passphrase with PBKDF2-HMAC-SHA256 over a
+per-vault salt, so a stolen vault is expensive to brute-force.
 ```
 
 ---

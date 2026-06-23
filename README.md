@@ -13,6 +13,10 @@ in SPARK (machine-proved, not just tested).
 - **Verifiable integrity.** Every object is content-addressed, erasure-coded, and
   continuously scrubbed and self-healed; the trusted core's invariants are proved
   with `gnatprove`.
+- **Authenticated encryption.** Objects are encrypt-then-MAC with key separation
+  (ChaCha20 plus a keyed HMAC-SHA256 tag); a wrong key or any tampering is
+  cryptographically rejected. The key is derived from a passphrase with
+  PBKDF2-HMAC-SHA256 over a per-vault salt.
 - **Air-gapped.** One-way ingest, sync windows, an operator seal, and
   technology-break export for offline isolation.
 
@@ -41,10 +45,12 @@ external dependency, validated against published test vectors.
 On top of the verified core, dezhan runs an end-to-end S3 service:
 
 - **Storage** (`Dezhan.Storage.Cas`): content-addressed chunks, deduplication,
-  in-tree DEFLATE compression (`Dezhan.Storage.Deflate`, RFC 1951), encryption at
-  source (ChaCha20 under a per-object convergent nonce), and Reed-Solomon erasure
-  coding (4 data + 2 parity per chunk). A background scrub verifies every shard
-  and rebuilds missing or corrupt ones from parity.
+  in-tree DEFLATE compression (`Dezhan.Storage.Deflate`, RFC 1951), authenticated
+  encryption at source (ChaCha20 encrypt-then-MAC with key separation and a keyed
+  HMAC-SHA256 tag per object, under a per-object convergent nonce), and
+  Reed-Solomon erasure coding (4 data + 2 parity per chunk). A background scrub
+  verifies every shard, rebuilds missing or corrupt ones from parity, and
+  quarantines anything beyond repair.
 - **Vault** (`Dezhan.Vault`): WORM orchestration tying storage, retention, clock,
   and audit together, with multipart uploads, garbage collection, legal hold, and
   air-gap modes. State is persisted, so the vault survives a restart.

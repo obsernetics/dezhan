@@ -82,15 +82,22 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   rewrites bit-identical content-addressed bytes, so it preserves immutability
   and is safe on a sealed vault. The server runs it during idle periods and on
   `POST /admin/scrub`, and exposes `dezhan_scrub_*` metrics including
-  `dezhan_scrub_shards_repaired`. Still to do: scheduling policy/cadence, and
-  quarantine for objects that lost more than M shards (unrepairable).
-- Key management is not implemented: where the vault key comes from, rotation,
-  per-object keys, and key wrapping are future work. The store takes a key from
-  the caller. Each object is encrypted under a per-object nonce derived
-  convergently from its content and the key (`Derive_Nonce`), so the keystream is
-  never reused across distinct objects while identical content still deduplicates
-  and Put stays idempotent. Tradeoff: convergent encryption lets a party that
-  already knows a plaintext confirm whether it is stored.
+  `dezhan_scrub_shards_repaired`. Objects that lost more than M shards are
+  quarantined (audited, persisted, `dezhan_quarantined` metric); a read of a
+  quarantined object is refused. Still to do: scheduling policy/cadence.
+- Encryption is authenticated (encrypt-then-MAC) with key separation. The vault
+  key is split into independent ENC and MAC subkeys (HMAC-SHA256 with distinct
+  labels); each object carries a keyed tag, HMAC-SHA256(MK, manifest-digest),
+  verified before any plaintext is produced, so a wrong key or any tampering is
+  rejected (`Auth_Failed`) rather than yielding garbage. ChaCha20 uses a
+  per-object nonce derived convergently from content and the enc subkey, so the
+  keystream is never reused across distinct objects while identical content still
+  deduplicates and Put stays idempotent. Tradeoff: convergent encryption lets a
+  party that already knows a plaintext confirm whether it is stored.
+- The server derives the data-encryption key from a passphrase with
+  PBKDF2-HMAC-SHA256 (`Dezhan.Kdf`, validated against published vectors) over a
+  per-vault random salt and a configurable work factor. Still to do: key
+  rotation, per-object keys, and wrapping/escrow of the derived key.
 - Vault + HTTP API + CLI + web UI: implemented as an end-to-end POC
   (`Dezhan.Vault`, `dezhan_server`, `dezhan_cli`). WORM enforced, audit chain,
   health, Prometheus metrics, minimal UI. Durable persistence is implemented:
