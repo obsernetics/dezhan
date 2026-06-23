@@ -96,15 +96,23 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   party that already knows a plaintext confirm whether it is stored.
 - The server derives the data-encryption key from a passphrase with
   PBKDF2-HMAC-SHA256 (`Dezhan.Kdf`, validated against published vectors) over a
-  per-vault random salt and a configurable work factor. Still to do: key
-  rotation, per-object keys, and wrapping/escrow of the derived key.
+  per-vault random salt and a configurable work factor. The data-encryption key
+  is a random DEK wrapped (encrypt-then-MAC, `Dezhan.Keystore`) under that
+  passphrase-derived key and stored in `<root>/vault.key`; setting
+  `DEZHAN_NEW_VAULT_KEY` re-wraps the same DEK under a new passphrase, so
+  rotation never re-encrypts data. A wrong passphrase is refused at startup.
+  Still to do: per-object keys and external escrow/HSM of the DEK.
 - Vault + HTTP API + CLI + web UI: implemented as an end-to-end POC
   (`Dezhan.Vault`, `dezhan_server`, `dezhan_cli`). WORM enforced, audit chain,
   health, Prometheus metrics, minimal UI. Durable persistence is implemented:
   the object index, audit chain, and trusted-time high-water mark are written to
   `<root>/vault.state` on each mutation and reloaded on open, so the vault
-  survives a restart (write-temp-then-rename; full crash-safety with fsync and a
-  binary format is still to do). Still to do: AWS SigV4 authentication, multipart
+  survives a restart. The write is crash-safe: the new state is written to a
+  temp file, fsynced, atomically renamed over the live state, and the directory
+  is fsynced (`Dezhan.Platform.Sync`, an audited libc FFI), so a crash leaves
+  either the old or the new complete state, never a partial file. The on-disk
+  format is text (a binary format is optional and not required for durability).
+  Still to do: AWS SigV4 authentication, multipart
   uploads, S3 bucket/prefix semantics (a flat object list exists via GET /v),
 concurrency (the server is single-threaded). SigV4 authentication is implemented
 and enforced: the signing core (`Dezhan.Sigv4`, on the RFC 4231-validated

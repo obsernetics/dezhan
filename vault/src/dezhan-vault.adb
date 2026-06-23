@@ -11,11 +11,13 @@ with Dezhan.Trusted_Core.Clock_Guard;
 with Dezhan.Trusted_Core.Audit;         use Dezhan.Trusted_Core.Audit;
 with Dezhan.Storage.Cas;                use Dezhan.Storage.Cas;
 with Dezhan.Platform.Clock;
+with Dezhan.Platform.Sync;
 
 package body Dezhan.Vault with SPARK_Mode => Off is
 
-   package CG  renames Dezhan.Trusted_Core.Clock_Guard;
-   package Cas renames Dezhan.Storage.Cas;
+   package CG   renames Dezhan.Trusted_Core.Clock_Guard;
+   package Cas  renames Dezhan.Storage.Cas;
+   package Sync renames Dezhan.Platform.Sync;
 
    Clock_Tolerance : constant Trusted_Time := 2;
 
@@ -221,10 +223,11 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          end;
       end loop;
       Close (F);
-      if Exists (State_Path (V)) then
-         Delete_File (State_Path (V));
-      end if;
-      Rename (Tmp, State_Path (V));
+      --  Crash-safe publish: flush the temp file, then atomically rename it
+      --  over the live state and flush the directory. A crash leaves either the
+      --  old complete state or the new complete state, never a partial file.
+      Sync.Fsync (Tmp);
+      Sync.Durable_Rename (Tmp, State_Path (V), To_String (V.Self.Root));
    end Save;
 
    procedure Load (V : in out Vault_Type) is
