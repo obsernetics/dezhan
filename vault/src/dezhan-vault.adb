@@ -1,5 +1,7 @@
 with Ada.Strings.Unbounded;            use Ada.Strings.Unbounded;
 with Ada.Strings.Hash;
+with Ada.Text_IO;                       use Ada.Text_IO;
+with Ada.Directories;                   use Ada.Directories;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Vectors;
 with Dezhan.Trusted_Core.Hashing;       use Dezhan.Trusted_Core.Hashing;
@@ -56,15 +58,180 @@ package body Dezhan.Vault with SPARK_Mode => Off is
         (Append (Last, CG.Now (V.Self.Clock), Kind, Subject, Detail));
    end Add_Audit;
 
+   --  ---- Durable persistence (text snapshot, atomically replaced) ----
+
+   Hex_Digits : constant String := "0123456789abcdef";
+
+   function State_Path (V : Vault_Type) return String is
+     (Compose (To_String (V.Self.Root), "vault.state"));
+
+   function To_Hex (D : Digest) return String is
+      R : String (1 .. 64);
+   begin
+      for I in 0 .. 31 loop
+         R (I * 2 + 1) := Hex_Digits (Integer (D (I)) / 16 + 1);
+         R (I * 2 + 2) := Hex_Digits (Integer (D (I)) mod 16 + 1);
+      end loop;
+      return R;
+   end To_Hex;
+
+   function Nibble (C : Character) return Natural is
+     (if C in '0' .. '9' then Character'Pos (C) - Character'Pos ('0')
+      else Character'Pos (C) - Character'Pos ('a') + 10);
+
+   function From_Hex (S : String) return Digest is
+      D : Digest := (others => 0);
+   begin
+      for I in 0 .. 31 loop
+         D (I) := Byte (Nibble (S (S'First + I * 2)) * 16
+                        + Nibble (S (S'First + I * 2 + 1)));
+      end loop;
+      return D;
+   end From_Hex;
+
+   function Str_To_Hex (S : String) return String is
+      R : String (1 .. S'Length * 2);
+   begin
+      for I in 0 .. S'Length - 1 loop
+         declare
+            B : constant Natural := Character'Pos (S (S'First + I));
+         begin
+            R (I * 2 + 1) := Hex_Digits (B / 16 + 1);
+            R (I * 2 + 2) := Hex_Digits (B mod 16 + 1);
+         end;
+      end loop;
+      return R;
+   end Str_To_Hex;
+
+   function Hex_To_Str (H : String) return String is
+      R : String (1 .. H'Length / 2);
+   begin
+      for I in 0 .. R'Length - 1 loop
+         R (I + 1) := Character'Val
+           (Nibble (H (H'First + I * 2)) * 16 + Nibble (H (H'First + I * 2 + 1)));
+      end loop;
+      return R;
+   end Hex_To_Str;
+
+   --  N-th whitespace-separated field of Line ("" if absent).
+   function Field (Line : String; N : Positive) return String is
+      I     : Natural := Line'First;
+      Count : Natural := 0;
+   begin
+      while I <= Line'Last loop
+         while I <= Line'Last and then Line (I) = ' ' loop
+            I := I + 1;
+         end loop;
+         exit when I > Line'Last;
+         declare
+            Start : constant Natural := I;
+         begin
+            while I <= Line'Last and then Line (I) /= ' ' loop
+               I := I + 1;
+            end loop;
+            Count := Count + 1;
+            if Count = N then
+               return Line (Start .. I - 1);
+            end if;
+         end;
+      end loop;
+      return "";
+   end Field;
+
+   procedure Save (V : Vault_Type) is
+      Tmp : constant String := State_Path (V) & ".tmp";
+      F   : File_Type;
+   begin
+      Create (F, Out_File, Tmp);
+      Put_Line (F, "DEZHAN_VAULT 1");
+      Put_Line (F, "CLOCK " & Trusted_Time'Image (CG.Now (V.Self.Clock))
+                   & (if CG.Is_Sealed (V.Self.Clock) then " 1" else " 0"));
+      for Cur in V.Self.Index.Iterate loop
+         declare
+            Name : constant String := Meta_Maps.Key (Cur);
+            M    : constant Meta    := Meta_Maps.Element (Cur);
+         begin
+            Put_Line (F, "OBJ " & Str_To_Hex (Name) & " " & String (M.Id)
+                         & Lock_Mode'Pos (M.Lock.Mode)'Image
+                         & M.Lock.Retain_Until'Image
+                         & M.Lock.Created_At'Image);
+         end;
+      end loop;
+      Put_Line (F, "AUDIT" & Natural'Image (Natural (V.Self.Log.Length)));
+      for I in 0 .. Natural (V.Self.Log.Length) - 1 loop
+         declare
+            E : constant Audit_Entry := V.Self.Log.Element (I);
+         begin
+            Put_Line (F, "A" & E.Seq'Image & E.Time'Image
+                         & Audit_Event'Pos (E.Kind)'Image
+                         & " " & To_Hex (E.Subject) & E.Detail'Image
+                         & " " & To_Hex (E.Prev_Hash)
+                         & " " & To_Hex (E.Hash));
+         end;
+      end loop;
+      Close (F);
+      if Exists (State_Path (V)) then
+         Delete_File (State_Path (V));
+      end if;
+      Rename (Tmp, State_Path (V));
+   end Save;
+
+   procedure Load (V : in out Vault_Type) is
+      F : File_Type;
+   begin
+      Open (F, In_File, State_Path (V));
+      while not End_Of_File (F) loop
+         declare
+            Line : constant String := Get_Line (F);
+            Tag  : constant String := Field (Line, 1);
+         begin
+            if Tag = "CLOCK" then
+               V.Self.Clock :=
+                 (Floor     => Trusted_Time'Value (Field (Line, 2)),
+                  Last_Mono => 0,
+                  Last_Real => 0,
+                  Anomaly   => CG.None,
+                  Sealed    => Field (Line, 3) = "1");
+               V.Self.Started := False;  --  re-baseline monotonic on next tick
+            elsif Tag = "OBJ" then
+               V.Self.Index.Include
+                 (Hex_To_Str (Field (Line, 2)),
+                  (Id   => Object_Id (Field (Line, 3)),
+                   Lock =>
+                     (Mode         =>
+                        Lock_Mode'Val (Integer'Value (Field (Line, 4))),
+                      Retain_Until => Trusted_Time'Value (Field (Line, 5)),
+                      Created_At   => Trusted_Time'Value (Field (Line, 6)))));
+            elsif Tag = "A" then
+               V.Self.Log.Append
+                 (Audit_Entry'
+                    (Seq       => Natural'Value (Field (Line, 2)),
+                     Time      => Trusted_Time'Value (Field (Line, 3)),
+                     Kind      =>
+                       Audit_Event'Val (Integer'Value (Field (Line, 4))),
+                     Subject   => From_Hex (Field (Line, 5)),
+                     Detail    => Trusted_Time'Value (Field (Line, 6)),
+                     Prev_Hash => From_Hex (Field (Line, 7)),
+                     Hash      => From_Hex (Field (Line, 8))));
+            end if;
+         end;
+      end loop;
+      Close (F);
+   end Load;
+
    procedure Open (V : out Vault_Type; Root : String; Key : Key_256) is
    begin
       V.Self := new State;
       V.Self.Root := To_Unbounded_String (Root);
       V.Self.Key  := Key;
       Initialize (Root);
-      V.Self.Clock :=
-        CG.Init ((Mono => 0, Realtime => 0, Boot_Changed => False));
-      V.Self.Log.Append (Genesis_Entry (Time => 0));
+      if Exists (Compose (Root, "vault.state")) then
+         Load (V);
+      else
+         V.Self.Clock :=
+           CG.Init ((Mono => 0, Realtime => 0, Boot_Changed => False));
+         V.Self.Log.Append (Genesis_Entry (Time => 0));
+      end if;
    end Open;
 
    procedure Put_Object
@@ -87,6 +254,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       begin
          V.Self.Index.Include (Name, (Id => Id, Lock => Lock));
          Add_Audit (V, Lock_Created, Name_Digest (Name), At_Time + Retain_For);
+         Save (V);
       end;
    end Put_Object;
 
@@ -119,9 +287,11 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          if Can_Delete (M.Lock, At_Time, Auth) then
             V.Self.Index.Delete (Name);
             Add_Audit (V, Delete_Allowed, Name_Digest (Name), At_Time);
+            Save (V);
             return True;
          else
             Add_Audit (V, Delete_Denied, Name_Digest (Name), At_Time);
+            Save (V);
             return False;
          end if;
       end;
@@ -149,6 +319,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          V.Self.Clock := CG.Tick (V.Self.Clock, Sample, Clock_Tolerance);
          if CG.Is_Sealed (V.Self.Clock) and then not Before then
             Add_Audit (V, Seal_Engaged, (others => 0), CG.Now (V.Self.Clock));
+            Save (V);
          end if;
       end;
    end Tick_Clock;

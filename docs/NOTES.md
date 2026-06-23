@@ -10,11 +10,12 @@ finished, verified work. Keep it current as the trusted core grows.
   `clock_gettime` with `SPARK_Mode => Off`. It hardcodes `Boot_Changed => False`
   (single process lifetime, no cross-reboot detection) and drops sub-second
   precision. It is untrusted by design; the Clock Guard validates its output.
-- **Guard state is not persisted.** The monotonic high-water mark
-  (`Guard_State`) lives in memory only and is supplied by the caller. For the
-  trusted-time floor to remain meaningful across reboots it must be persisted
-  durably; that lands with the storage engine. Until then, trusted time resets
-  on restart.
+- **Guard state persistence lives in the vault layer.** The pure Clock Guard
+  keeps state in memory and takes it from the caller; the vault now persists the
+  trusted-time high-water mark (the `Floor`) and the sealed flag in its on-disk
+  snapshot and restores them on open, so trusted time does not reset to zero on
+  restart. On reload the monotonic baseline is re-taken from the next sample
+  (conservative: it never overestimates elapsed time).
 - **Seal is latched but not consumed.** The Clock Guard sets `Sealed` on detected
   manipulation, but nothing yet forces the vault into read-only or raises an
   operator alarm. Wiring seal to vault behavior is pending.
@@ -53,11 +54,13 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   (a per-object random nonce is the intended hardening).
 - Vault + HTTP API + CLI + web UI: implemented as an end-to-end POC
   (`Dezhan.Vault`, `dezhan_server`, `dezhan_cli`). WORM enforced, audit chain,
-  health, Prometheus metrics, minimal UI. Still to do: durable metadata
-  persistence (the vault index and audit chain are in memory, lost on restart),
-  AWS SigV4 authentication, multipart uploads, bucket/LIST semantics, concurrency
-  (the server is single-threaded), structured logs, and real key management (a
-  fixed demo key is used).
+  health, Prometheus metrics, minimal UI. Durable persistence is implemented:
+  the object index, audit chain, and trusted-time high-water mark are written to
+  `<root>/vault.state` on each mutation and reloaded on open, so the vault
+  survives a restart (write-temp-then-rename; full crash-safety with fsync and a
+  binary format is still to do). Still to do: AWS SigV4 authentication, multipart
+  uploads, bucket/LIST semantics, concurrency (the server is single-threaded),
+  structured logs, and real key management (a fixed demo key is used).
 - General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays
   the headline. Both modes share the S3 API, storage engine, audit chain, and

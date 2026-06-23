@@ -38,8 +38,9 @@ Platform layer (regular Ada), an end-to-end POC on top of the verified core:
   `/`), built on `GNAT.Sockets` with no external dependency.
 - **CLI** (`dezhan_cli`): a thin client for the server.
 
-SigV4 authentication, multipart uploads, durable metadata persistence, and key
-management are not in the POC (see `docs/NOTES.md`).
+The vault persists its object index, audit chain, and trusted-time high-water
+mark to disk, so it survives a restart. SigV4 authentication, multipart uploads,
+and key management are not in the POC (see `docs/NOTES.md`).
 
 See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
 [`docs/NOTES.md`](docs/NOTES.md) for the roadmap and current limitations.

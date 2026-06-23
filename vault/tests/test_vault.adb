@@ -101,6 +101,26 @@ begin
    Check (Audit_Length (V) > 1, "audit chain recorded events");
    Check (Audit_Verifies (V), "audit chain verifies (tamper-evident)");
 
+   --  Durability: a new vault opened on the same root recovers the metadata,
+   --  audit chain, retention locks, and trusted-time high-water mark.
+   Put_Object (V, "persist-me", Bytes ("durable payload"), Compliance,
+               Retain_For => 100_000);
+   declare
+      V2 : Vault_Type;
+   begin
+      Open (V2, Root, Key);
+      Check (Contains (V2, "persist-me"),
+             "object survives reopen (durable metadata)");
+      Check (Equal (Get_Object (V2, "persist-me"), Bytes ("durable payload")),
+             "reopened object round-trips");
+      Check (Audit_Verifies (V2),
+             "audit chain survives reopen and verifies");
+      Check (not Contains (V2, "backup-1"),
+             "earlier deletion persisted across reopen");
+      Check (not Delete_Object (V2, "persist-me", Bypass => True),
+             "retention survives reopen (still locked)");
+   end;
+
    New_Line;
    if Failures = 0 then
       Put_Line ("ALL TESTS PASSED");
