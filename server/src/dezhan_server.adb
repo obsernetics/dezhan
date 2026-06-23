@@ -199,6 +199,10 @@ procedure Dezhan_Server is
          elsif Method = "POST" and then Path = "/admin/tick" then
             Send_Text (Ch, "200 OK", "trusted_time" & Trusted_Time'Image (Now (V)));
 
+         elsif Method = "POST" and then Path = "/admin/seal" then
+            Seal (V);
+            Send_Text (Ch, "200 OK", "vault sealed (read-only)");
+
          elsif Path'Length > 3 and then Path (Path'First .. Path'First + 2) = "/v/" then
             declare
                Name : constant String := Path (Path'First + 3 .. Path'Last);
@@ -254,6 +258,12 @@ procedure Dezhan_Server is
          else
             Send_Text (Ch, "404 Not Found", "unknown route");
          end if;
+      exception
+         when Vault_Sealed =>
+            Send_Text (Ch, "503 Service Unavailable",
+                       "vault is sealed (read-only)");
+         when Not_Found =>
+            Send_Text (Ch, "404 Not Found", "no such object");
       end;
    end Handle;
 

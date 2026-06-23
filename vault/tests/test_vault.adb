@@ -121,6 +121,27 @@ begin
              "retention survives reopen (still locked)");
    end;
 
+   --  Air-gap seal: once the operator seals the vault, writes are refused, and
+   --  the seal persists across a reopen.
+   Seal (V);
+   Check (Sealed (V), "operator seal makes the vault read-only");
+   declare
+      Raised : Boolean := False;
+   begin
+      begin
+         Put_Object (V, "after-seal", Bytes ("x"), Compliance, Retain_For => 100);
+      exception
+         when Vault_Sealed => Raised := True;
+      end;
+      Check (Raised, "writes are refused while sealed");
+   end;
+   declare
+      V3 : Vault_Type;
+   begin
+      Open (V3, Root, Key);
+      Check (Sealed (V3), "seal persists across reopen");
+   end;
+
    New_Line;
    if Failures = 0 then
       Put_Line ("ALL TESTS PASSED");

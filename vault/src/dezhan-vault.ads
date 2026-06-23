@@ -21,6 +21,7 @@ package Dezhan.Vault with SPARK_Mode => Off is
 
    Not_Found     : exception;
    Invalid_Mode  : exception;
+   Vault_Sealed  : exception;   --  raised by mutations while the vault is sealed
 
    --  Open (or create) a vault rooted at Root, encrypted under Key.
    procedure Open (V : out Vault_Type; Root : String; Key : Key_256);
@@ -56,7 +57,15 @@ package Dezhan.Vault with SPARK_Mode => Off is
    --  realtime) through the platform boundary.
    procedure Tick_From_System (V : in out Vault_Type);
 
+   --  Operator-initiated seal: the vault becomes read-only (air-gap seal). A
+   --  clock anomaly also seals the vault. While sealed, Put_Object and
+   --  Delete_Object raise Vault_Sealed. Sealing is recorded in the audit chain
+   --  and persisted.
+   procedure Seal (V : in out Vault_Type);
+
    function Now    (V : Vault_Type) return Trusted_Time;
+
+   --  True if sealed for any reason (operator seal or detected clock anomaly).
    function Sealed (V : Vault_Type) return Boolean;
 
    --  Audit chain: number of entries, and an independent self-verification.

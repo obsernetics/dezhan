@@ -29,13 +29,21 @@ package body Dezhan.Vault with SPARK_Mode => Off is
      (Index_Type => Natural, Element_Type => Audit_Entry);
 
    type State is record
-      Root    : Unbounded_String;
-      Key     : Key_256;
-      Clock   : CG.Guard_State;
-      Started : Boolean := False;   --  clock baseline taken from the first tick
-      Index   : Meta_Maps.Map;
-      Log     : Log_Vectors.Vector;
+      Root      : Unbounded_String;
+      Key       : Key_256;
+      Clock     : CG.Guard_State;
+      Started   : Boolean := False; --  clock baseline taken from the first tick
+      Op_Sealed : Boolean := False; --  operator-initiated read-only seal
+      Index     : Meta_Maps.Map;
+      Log       : Log_Vectors.Vector;
    end record;
+
+   --  Writes are refused only by an operator seal (air-gap read-only). A clock
+   --  anomaly is a separate alarm (surfaced by Sealed/metrics): it does not by
+   --  itself freeze the vault, because the retention guarantee already holds
+   --  (trusted time never advanced), and freezing on every clock blip would be
+   --  too aggressive.
+   function Read_Only (V : Vault_Type) return Boolean is (V.Self.Op_Sealed);
 
    function Name_Digest (Name : String) return Digest is
       B : Byte_Array (0 .. Name'Length - 1);
@@ -145,7 +153,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Create (F, Out_File, Tmp);
       Put_Line (F, "DEZHAN_VAULT 1");
       Put_Line (F, "CLOCK " & Trusted_Time'Image (CG.Now (V.Self.Clock))
-                   & (if CG.Is_Sealed (V.Self.Clock) then " 1" else " 0"));
+                   & (if CG.Is_Sealed (V.Self.Clock) then " 1" else " 0")
+                   & (if V.Self.Op_Sealed then " 1" else " 0"));
       for Cur in V.Self.Index.Iterate loop
          declare
             Name : constant String := Meta_Maps.Key (Cur);
@@ -192,6 +201,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                   Last_Real => 0,
                   Anomaly   => CG.None,
                   Sealed    => Field (Line, 3) = "1");
+               V.Self.Op_Sealed := Field (Line, 4) = "1";
                V.Self.Started := False;  --  re-baseline monotonic on next tick
             elsif Tag = "OBJ" then
                V.Self.Index.Include
@@ -242,6 +252,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Retain_For : Trusted_Time)
    is
    begin
+      if Read_Only (V) then
+         raise Vault_Sealed;
+      end if;
       if Mode = Unlocked then
          raise Invalid_Mode;
       end if;
@@ -276,6 +289,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
      (V : in out Vault_Type; Name : String; Bypass : Boolean) return Boolean
    is
    begin
+      if Read_Only (V) then
+         raise Vault_Sealed;
+      end if;
       if not V.Self.Index.Contains (Name) then
          raise Not_Found;
       end if;
@@ -330,11 +346,20 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Tick_Clock (V, Sample.Mono, Sample.Realtime, Sample.Boot_Changed);
    end Tick_From_System;
 
+   procedure Seal (V : in out Vault_Type) is
+   begin
+      if not V.Self.Op_Sealed then
+         V.Self.Op_Sealed := True;
+         Add_Audit (V, Seal_Engaged, (others => 0), CG.Now (V.Self.Clock));
+         Save (V);
+      end if;
+   end Seal;
+
    function Now (V : Vault_Type) return Trusted_Time is
      (CG.Now (V.Self.Clock));
 
    function Sealed (V : Vault_Type) return Boolean is
-     (CG.Is_Sealed (V.Self.Clock));
+     (V.Self.Op_Sealed or else CG.Is_Sealed (V.Self.Clock));
 
    function Audit_Length (V : Vault_Type) return Natural is
      (Natural (V.Self.Log.Length));

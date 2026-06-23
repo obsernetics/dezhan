@@ -16,9 +16,13 @@ finished, verified work. Keep it current as the trusted core grows.
   snapshot and restores them on open, so trusted time does not reset to zero on
   restart. On reload the monotonic baseline is re-taken from the next sample
   (conservative: it never overestimates elapsed time).
-- **Seal is latched but not consumed.** The Clock Guard sets `Sealed` on detected
-  manipulation, but nothing yet forces the vault into read-only or raises an
-  operator alarm. Wiring seal to vault behavior is pending.
+- **Seal semantics.** An operator seal (`Vault.Seal`, `POST /admin/seal`) makes
+  the vault read-only: writes raise `Vault_Sealed` (HTTP 503) and the seal
+  persists across restart. A clock anomaly is treated as a separate alarm
+  (surfaced by `Sealed`/metrics and the audit chain), not an automatic freeze,
+  because the retention guarantee already holds (trusted time never advanced) and
+  freezing on every clock blip would be too aggressive. Auto-seal policy on
+  anomaly, and an operator unseal workflow, are future decisions.
 - **Trusted time is whole seconds from an opaque epoch (0).** It is
   monotonic-elapsed, not wall-clock. Absolute calendar time for display is not
   provided by the trusted core.
@@ -67,9 +71,8 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   scrubbing; only Immutable buckets use the retention state machine.
 - Local auth realm, RBAC, quorum approvals, API tokens, service accounts.
 - Observability: structured logs (health endpoints and Prometheus metrics exist).
-- Air-gap features: sync windows, seal operation (the clock guard already latches
-  a seal; wiring it to reject writes is pending), one-way ingest, technology
-  break.
+- Air-gap features: the seal operation (operator read-only) is implemented;
+  sync windows, one-way ingest, and technology break are still to do.
 - Hardware-backed time anchor (TPM or secure RTC) behind the existing pluggable
   seam in the Clock Guard.
 - Durable, crash-safe persistence for trusted-core state.
