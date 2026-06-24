@@ -58,11 +58,14 @@ On top of the verified core, dezhan runs an end-to-end S3 service:
   and audit together, with multipart uploads, garbage collection, legal hold, and
   air-gap modes. State is persisted, so the vault survives a restart.
 - **Server** (`dezhan_server`): an S3-compatible HTTP API on `GNAT.Sockets` with
-  no external dependency. Path-style buckets and objects (create/head/delete
-  bucket, ListBuckets, ListObjectsV2 with prefix/delimiter, PUT/GET/HEAD/DELETE,
-  byte-range reads, CopyObject, batch delete, S3-XML multipart) with object-lock
-  buckets enforcing WORM, plus AWS SigV4 auth, Prometheus `/metrics`, `/healthz`,
-  and a minimal web UI. Responses use S3 XML and `<Error>` bodies.
+  no external dependency, validated against the AWS SDK (boto3). Path-style
+  buckets and objects (create/head/delete bucket, ListBuckets, ListObjectsV2
+  with prefix/delimiter, PUT/GET/HEAD/DELETE, byte-range reads, CopyObject, batch
+  delete, S3-XML multipart), object versioning (ListObjectVersions, GET by
+  versionId), Content-Type and user metadata, conditional requests
+  (If-None-Match/If-Match), AWS SigV4 in both header and presigned-URL form, and
+  object-lock buckets enforcing WORM. Prometheus `/metrics`, `/healthz`, and a
+  minimal web UI. Responses use S3 XML and `<Error>` bodies.
 - **CLI** (`dezhan_cli`): a thin signed client, including `sput` for a
   SigV4-signed PUT.
 
