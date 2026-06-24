@@ -1,5 +1,9 @@
 # dezhan
 
+[![ci](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml/badge.svg)](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml)
+[![SPARK proof: 325 checks, 0 unproved](https://img.shields.io/badge/SPARK%20proof-325%20checks%2C%200%20unproved-brightgreen)](docs/SPEC.md)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](#)
+
 A secure, immutable backup vault that speaks S3. Point any S3 client or backup
 tool at it (aws-cli, restic, Veeam, Velero, boto3) and your data is stored
 content-addressed, encrypted, erasure-coded, and optionally WORM-locked so it

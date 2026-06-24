@@ -170,8 +170,13 @@ demo key is used at rest).
 - Hardware-backed time anchor (TPM or secure RTC) behind the existing pluggable
   seam in the Clock Guard.
 - Durable, crash-safe persistence for trusted-core state.
-- CI/CD: `.github/workflows/ada.yml` builds with GPRbuild and runs the tests on
-  push/PR; `.github/workflows/release.yml` builds binaries on a `v*` tag and
-  generates SLSA3 provenance via the SLSA GitHub generator. These run on GitHub
-  Actions and have not been executed in this offline environment, so the first
-  run may need a minor tweak (toolchain action version or runner specifics).
+- CI/CD: `.github/workflows/ci.yml` provisions the toolchain via Alire, builds
+  the whole product, runs every unit test (`scripts/test.sh`), and runs the SPARK
+  proof of the trusted core as a **hard gate** (`scripts/prove.sh`, gnatprove
+  `--checks-as-errors=on`): a single unproved check fails the build, so the
+  mandatory immutability invariants stay machine-proved on every commit. The
+  gate script is verified in the dev VM (0 unproved); the workflow follows
+  standard Alire-on-GitHub-Actions patterns but has not been run on a GitHub
+  runner from this offline environment, so the first run may need a minor
+  toolchain-provisioning tweak. SBOM, signed static-binary releases, and
+  coverage reporting are the remaining distribution items.
