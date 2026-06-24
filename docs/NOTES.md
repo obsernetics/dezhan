@@ -129,8 +129,10 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   bodies, and SigV4 in both header and presigned-URL form enforced on all data
   paths. Large single objects over the one-manifest limit are transparently
   stored as composites, so a plain large PUT works without multipart. The legacy
-  flat `/v` API remains. Still to do on the S3 layer: the MinIO admin/IAM
-  surface, lifecycle, and CORS. The server stays single-threaded.
+  flat `/v` API remains. The server handles connections concurrently (a pool of
+  worker tasks; all vault access serialized by a lock, so integrity holds) and
+  answers CORS preflight. Still to do on the S3 layer: the MinIO admin/IAM
+  surface and lifecycle policies (the latter conflicts with immutable retention).
   SigV4 authentication is implemented
 and enforced: the signing core (`Dezhan.Sigv4`, on the RFC 4231-validated
 `Dezhan.Trusted_Core.HMAC`) is validated byte-for-byte against the AWS worked
