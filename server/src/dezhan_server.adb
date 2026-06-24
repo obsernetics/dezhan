@@ -623,12 +623,13 @@ procedure Dezhan_Server is
    --  Response head only (for HEAD): one Content-Length set to the object size,
    --  no body.
    procedure Send_Head
-     (Ch : Stream_Access; Status : String; Length : Natural; Extra : String := "")
+     (Ch : Stream_Access; Status : String; Length : Natural;
+      Extra : String := ""; Ctype : String := "application/octet-stream")
    is
    begin
       String'Write (Ch,
         "HTTP/1.1 " & Status & CRLF
-        & "Content-Type: application/octet-stream" & CRLF
+        & "Content-Type: " & Ctype & CRLF
         & "Content-Length:" & Natural'Image (Length) & CRLF
         & Extra & "Connection: close" & CRLF & CRLF);
    end Send_Head;
@@ -670,6 +671,35 @@ procedure Dezhan_Server is
       end loop;
       return R (1 .. L);
    end Pct_Encode;
+
+   --  Capture Content-Type and x-amz-meta-* headers into an opaque blob:
+   --  the content-type value, a LF, then the x-amz-meta-* header lines verbatim
+   --  (CRLF-terminated, ready to re-emit on GET/HEAD).
+   function Collect_Meta (Head : String) return String is
+      CT    : constant String := Header (Head, "content-type");
+      R     : Unbounded_String;
+      Start : Natural := Head'First;
+   begin
+      for I in Head'Range loop
+         if Head (I) = ASCII.LF then
+            declare
+               Raw  : constant String := Head (Start .. I - 1);
+               Line : constant String :=
+                 (if Raw'Length > 0 and then Raw (Raw'Last) = ASCII.CR
+                  then Raw (Raw'First .. Raw'Last - 1) else Raw);
+            begin
+               if Line'Length >= 11
+                 and then Translate (Line (Line'First .. Line'First + 10),
+                            Ada.Strings.Maps.Constants.Lower_Case_Map) = "x-amz-meta-"
+               then
+                  Append (R, Line & CRLF);
+               end if;
+            end;
+            Start := I + 1;
+         end if;
+      end loop;
+      return CT & ASCII.LF & To_String (R);
+   end Collect_Meta;
 
    function To_Str (D : Stream_Element_Array) return String is
       R : String (1 .. Natural (D'Length));
@@ -1055,7 +1085,8 @@ procedure Dezhan_Server is
                     (if Src (Src'First) = '/' then Src (Src'First + 1 .. Src'Last) else Src);
                   Bytes : constant Stream_Element_Array := Get_Object (V, S0);
                begin
-                  Put_Object (V, Name, Bytes, Mode, Retain);
+                  Put_Object (V, Name, Bytes, Mode, Retain,
+                    User_Meta => Collect_Meta (Head));
                   Send_XML (Ch, "200 OK",
                     "<?xml version=""1.0"" encoding=""UTF-8""?>"
                     & "<CopyObjectResult><LastModified>" & Epoch_Date
@@ -1063,7 +1094,8 @@ procedure Dezhan_Server is
                     & "&quot;</ETag></CopyObjectResult>");
                end;
             else
-               Put_Object (V, Name, Data, Mode, Retain);
+               Put_Object (V, Name, Data, Mode, Retain,
+                 User_Meta => Collect_Meta (Head));
                Send_Text (Ch, "200 OK", "",
                  Extra => "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF);
             end if;
@@ -1080,12 +1112,22 @@ procedure Dezhan_Server is
             declare
                Lock_Hdr : constant String :=
                  (if Locked then "x-amz-object-lock-mode: COMPLIANCE" & CRLF else "");
+               --  Stored metadata blob: content-type up to the first LF, then
+               --  the x-amz-meta-* header lines to re-emit.
+               Blob   : constant String := Object_Meta (V, Name);
+               LF_Pos : constant Natural := Index (Blob, (1 => ASCII.LF));
+               Raw_CT : constant String :=
+                 (if LF_Pos = 0 then "" else Blob (Blob'First .. LF_Pos - 1));
+               Meta_X : constant String :=
+                 (if LF_Pos = 0 then "" else Blob (LF_Pos + 1 .. Blob'Last));
+               Ctype  : constant String :=
+                 (if Raw_CT = "" then "application/octet-stream" else Raw_CT);
                ETag_H : constant String :=
                  "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF
-                 & "Accept-Ranges: bytes" & CRLF & Lock_Hdr;
+                 & "Accept-Ranges: bytes" & CRLF & Lock_Hdr & Meta_X;
             begin
                if Method = "HEAD" then
-                  Send_Head (Ch, "200 OK", Object_Size (V, Name), ETag_H);
+                  Send_Head (Ch, "200 OK", Object_Size (V, Name), ETag_H, Ctype);
                else
                   declare
                      Full  : constant Stream_Element_Array := Get_Object (V, Name);
@@ -1095,15 +1137,14 @@ procedure Dezhan_Server is
                      Ok    : Boolean;
                   begin
                      if Rng = "" then
-                        Send (Ch, "200 OK", "application/octet-stream", Full,
-                              Extra => ETag_H);
+                        Send (Ch, "200 OK", Ctype, Full, Extra => ETag_H);
                      else
                         Parse_Range (Rng, Total, First, Last, Ok);
                         if not Ok then
                            Send_Text (Ch, "416 Range Not Satisfiable", "",
                              Extra => "Content-Range: bytes */" & Img (Total) & CRLF);
                         else
-                           Send (Ch, "206 Partial Content", "application/octet-stream",
+                           Send (Ch, "206 Partial Content", Ctype,
                              Full (Full'First + Stream_Element_Offset (First)
                                    .. Full'First + Stream_Element_Offset (Last)),
                              Extra => ETag_H & "Content-Range: bytes " & Img (First)

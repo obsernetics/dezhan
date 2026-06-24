@@ -42,9 +42,14 @@ package Dezhan.Vault with SPARK_Mode => Off is
       Name       : String;
       Data       : Stream_Element_Array;
       Mode       : Lock_Mode;
-      Retain_For : Trusted_Time);
+      Retain_For : Trusted_Time;
+      User_Meta  : String := "");
 
    function Get_Object (V : Vault_Type; Name : String) return Stream_Element_Array;
+
+   --  Opaque per-object metadata blob stored at Put (Content-Type and user
+   --  headers); "" if none. The vault does not interpret it.
+   function Object_Meta (V : Vault_Type; Name : String) return String;
 
    --  Multipart upload (S3-style): begin an upload, append parts in order, then
    --  complete to store the object as a composite of its parts (which removes

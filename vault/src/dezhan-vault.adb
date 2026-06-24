@@ -31,6 +31,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Composite   : Boolean := False;  --  Id points to a list of part ids
       Quarantined : Boolean := False;  --  scrub found it unrepairable (lost > M)
       Size        : Natural := 0;      --  object plaintext length (for listings)
+      User_Meta   : Unbounded_String := Null_Unbounded_String;  --  opaque headers
    end record;
 
    package Meta_Maps is new Ada.Containers.Indefinite_Hashed_Maps
@@ -228,7 +229,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                          & (if M.Composite then " 1" else " 0")
                          & (if M.Lock.Legal_Hold then " 1" else " 0")
                          & (if M.Quarantined then " 1" else " 0")
-                         & Natural'Image (M.Size));
+                         & Natural'Image (M.Size)
+                         & " " & Str_To_Hex (To_String (M.User_Meta)));
          end;
       end loop;
       Put_Line (F, "AUDIT" & Natural'Image (Natural (V.Self.Log.Length)));
@@ -290,7 +292,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                    Composite   => Field (Line, 7) = "1",
                    Quarantined => Field (Line, 9) = "1",
                    Size        => (if Field (Line, 10) = "" then 0
-                                   else Natural'Value (Field (Line, 10)))));
+                                   else Natural'Value (Field (Line, 10))),
+                   User_Meta   =>
+                     To_Unbounded_String (Hex_To_Str (Field (Line, 11)))));
             elsif Tag = "A" then
                V.Self.Log.Append
                  (Audit_Entry'
@@ -328,7 +332,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Name       : String;
       Data       : Stream_Element_Array;
       Mode       : Lock_Mode;
-      Retain_For : Trusted_Time)
+      Retain_For : Trusted_Time;
+      User_Meta  : String := "")
    is
    begin
       Check_Ingest (V);
@@ -344,7 +349,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       begin
          V.Self.Index.Include
            (Name, (Id => Id, Lock => Lock, Composite => False,
-                   Quarantined => False, Size => Natural (Data'Length)));
+                   Quarantined => False, Size => Natural (Data'Length),
+                   User_Meta => To_Unbounded_String (User_Meta)));
          Add_Audit (V, Lock_Created, Name_Digest (Name), At_Time + Retain_For);
          Save (V);
       end;
@@ -486,7 +492,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          begin
             V.Self.Index.Include
               (Name, (Id => List_Id, Lock => Lock, Composite => True,
-                      Quarantined => False, Size => U.Total));
+                      Quarantined => False, Size => U.Total,
+                      User_Meta => Null_Unbounded_String));
             Add_Audit (V, Lock_Created, Name_Digest (Name),
                        At_Time + U.Retain_For);
          end;
@@ -525,6 +532,10 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    function Object_Size (V : Vault_Type; Name : String) return Natural is
      (if V.Self.Index.Contains (Name)
       then V.Self.Index.Element (Name).Size else 0);
+
+   function Object_Meta (V : Vault_Type; Name : String) return String is
+     (if V.Self.Index.Contains (Name)
+      then To_String (V.Self.Index.Element (Name).User_Meta) else "");
 
    function Object_Deletable (V : Vault_Type; Name : String) return Boolean is
      (V.Self.Index.Contains (Name)
