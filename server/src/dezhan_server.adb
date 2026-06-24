@@ -817,6 +817,27 @@ procedure Dezhan_Server is
               "<?xml version=""1.0"" encoding=""UTF-8""?>"
               & "<LocationConstraint xmlns=""http://s3.amazonaws.com/doc/2006-03-01/""/>");
             return;
+         elsif Index (Query, "object-lock") /= 0 then
+            if Method = "GET" then
+               if Locked then
+                  Send_XML (Ch, "200 OK",
+                    "<?xml version=""1.0"" encoding=""UTF-8""?>"
+                    & "<ObjectLockConfiguration><ObjectLockEnabled>Enabled"
+                    & "</ObjectLockEnabled></ObjectLockConfiguration>");
+               else
+                  S3_Error (Ch, "404 Not Found",
+                    "ObjectLockConfigurationNotFoundError", Path0);
+               end if;
+            else
+               Send_Text (Ch, "200 OK", "");
+            end if;
+            return;
+         elsif Method = "GET" and then Index (Query, "versioning") /= 0 then
+            Send_XML (Ch, "200 OK",
+              "<?xml version=""1.0"" encoding=""UTF-8""?>"
+              & "<VersioningConfiguration xmlns="
+              & """http://s3.amazonaws.com/doc/2006-03-01/""/>");
+            return;
          elsif Index (Query, "tagging") /= 0 then
             if Method = "GET" then
                Send_XML (Ch, "200 OK",
