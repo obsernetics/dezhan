@@ -10,11 +10,11 @@ integrity-critical core formally verified in SPARK.
 
 ## Quick start
 
-Build (needs the Ada/SPARK toolchain, e.g. via [Alire](https://alire.ada.dev)):
+Build everything (needs the Ada/SPARK toolchain, e.g. via
+[Alire](https://alire.ada.dev)):
 
 ```sh
-gprbuild -P server/dezhan_server.gpr      # the S3 server
-gprbuild -P cli/dezhan_cli.gpr            # optional CLI
+gprbuild -P dezhan.gpr        # server, CLI, and the audit verifier
 ```
 
 Run the server (`<port> <data-dir>`):
@@ -26,7 +26,15 @@ server/obj/dezhan_server 8080 /var/lib/dezhan
 ```
 
 On first start it generates a random data key wrapped under your passphrase and
-prints `dezhan server listening on port 8080`.
+prints `dezhan 1.0 listening on port 8080`. It warns if run with insecure
+defaults; for production set `DEZHAN_VAULT_KEY`, `DEZHAN_REQUIRE_AUTH`, and your
+own `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET`.
+
+Run the end-to-end conformance test (needs Python with `boto3`):
+
+```sh
+sh scripts/smoke.sh
+```
 
 ## Use it with the AWS CLI
 

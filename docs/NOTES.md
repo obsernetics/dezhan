@@ -129,9 +129,13 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   bodies, and SigV4 in both header and presigned-URL form enforced on all data
   paths. Large single objects over the one-manifest limit are transparently
   stored as composites, so a plain large PUT works without multipart. The legacy
-  flat `/v` API remains. The server handles connections concurrently (a pool of
-  worker tasks; all vault access serialized by a lock, so integrity holds) and
-  answers CORS preflight. Still to do on the S3 layer: the MinIO admin/IAM
+  flat `/v` API remains, so the bucket names `v`, `ui`, `admin`, `metrics`, and
+  `healthz` are reserved (rejected on create as they collide with control
+  routes). The whole S3 surface is exercised by a committed end-to-end test,
+  `scripts/smoke.sh` (boto3), and the build aggregates into `dezhan.gpr`. The
+  server handles connections concurrently (a pool of worker tasks; all vault
+  access serialized by a lock, so integrity holds) and answers CORS preflight.
+  Still to do on the S3 layer: the MinIO admin/IAM
   surface and lifecycle policies (the latter conflicts with immutable retention).
   SigV4 authentication is implemented
 and enforced: the signing core (`Dezhan.Sigv4`, on the RFC 4231-validated
