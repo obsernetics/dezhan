@@ -1,0 +1,9 @@
+--  Build the whole product with one command: `gprbuild -P dezhan.gpr`.
+--  The three executables pull in every library (trusted core, auth, storage,
+--  vault) transitively.
+aggregate project Dezhan is
+   for Project_Files use
+     ("server/dezhan_server.gpr",
+      "cli/dezhan_cli.gpr",
+      "verifier/dezhan_verify.gpr");
+end Dezhan;

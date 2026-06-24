@@ -55,7 +55,8 @@ with GNAT.OS_Lib;
 
 procedure Dezhan_Server is
 
-   CRLF : constant String := ASCII.CR & ASCII.LF;
+   Version : constant String := "dezhan 1.0";
+   CRLF    : constant String := ASCII.CR & ASCII.LF;
 
    Port : constant Port_Type :=
      (if Argument_Count >= 1 then Port_Type'Value (Argument (1)) else 8080);
@@ -1099,12 +1100,18 @@ procedure Dezhan_Server is
             return;
          end if;
          if Method = "PUT" then
-            if Bucket_Exists (V, Bucket) then
+            if Bucket = "v" or else Bucket = "ui" or else Bucket = "admin"
+              or else Bucket = "metrics" or else Bucket = "healthz"
+            then
+               --  These names are reserved by the control/legacy routes.
+               S3_Error (Ch, "400 Bad Request", "InvalidBucketName", Path0);
+            elsif Bucket_Exists (V, Bucket) then
                S3_Error (Ch, "409 Conflict", "BucketAlreadyOwnedByYou", Path0);
             else
                Create_Bucket (V, Bucket,
                  Object_Lock =>
-                   Header (Head, "x-amz-bucket-object-lock-enabled") = "true");
+                   Translate (Header (Head, "x-amz-bucket-object-lock-enabled"),
+                              Ada.Strings.Maps.Constants.Lower_Case_Map) = "true");
                Send_Text (Ch, "200 OK", "");
             end if;
          elsif Method = "HEAD" then
@@ -1787,8 +1794,23 @@ begin
    Addr.Port := Port;
    Bind_Socket (Server, Addr);
    Listen_Socket (Server);
-   Put_Line ("dezhan server listening on port" & Port_Type'Image (Port)
+   Put_Line (Version & " listening on port" & Port_Type'Image (Port)
              & " (root " & Root & ")");
+
+   --  Loudly flag insecure defaults so a production deploy is a deliberate
+   --  choice, not an accident.
+   if not Ada.Environment_Variables.Exists ("DEZHAN_VAULT_KEY") then
+      Put_Line ("WARNING: DEZHAN_VAULT_KEY not set; data at rest is encrypted "
+                & "under a public demo key. Set it for production.");
+   end if;
+   if not Ada.Environment_Variables.Exists ("DEZHAN_REQUIRE_AUTH") then
+      Put_Line ("WARNING: DEZHAN_REQUIRE_AUTH not set; unsigned (anonymous) "
+                & "requests are accepted. Set it for production.");
+   end if;
+   if not Ada.Environment_Variables.Exists ("DEZHAN_SECRET") then
+      Put_Line ("WARNING: DEZHAN_SECRET not set; using the public demo "
+                & "credential. Set DEZHAN_ACCESS_KEY/DEZHAN_SECRET for production.");
+   end if;
 
    --  Start the worker pool; the tasks run forever, so the program blocks here.
    declare
