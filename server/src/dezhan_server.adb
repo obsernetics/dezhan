@@ -545,32 +545,77 @@ procedure Dezhan_Server is
       end;
    end Q_Val;
 
+   function Pct_Decode (S : String) return String is
+      R : String (1 .. S'Length);
+      L : Natural := 0;
+      I : Natural := S'First;
+      function Nib (C : Character) return Natural is
+        (case C is
+            when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+            when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
+            when 'A' .. 'F' => Character'Pos (C) - Character'Pos ('A') + 10,
+            when others     => 0);
+   begin
+      while I <= S'Last loop
+         if S (I) = '%' and then I + 2 <= S'Last then
+            L := L + 1; R (L) := Character'Val (Nib (S (I + 1)) * 16 + Nib (S (I + 2)));
+            I := I + 3;
+         else
+            L := L + 1; R (L) := S (I); I := I + 1;
+         end if;
+      end loop;
+      return R (1 .. L);
+   end Pct_Decode;
+
+   --  Query string with every "K=..." token removed (used to drop
+   --  X-Amz-Signature before recomputing a presigned canonical query).
+   function Drop_Param (Q, K : String) return String is
+      R     : Unbounded_String;
+      Start : Natural := Q'First;
+      procedure Take (Tok : String) is
+      begin
+         if Tok'Length > 0
+           and then not (Tok'Length >= K'Length
+                         and then Tok (Tok'First .. Tok'First + K'Length - 1) = K)
+         then
+            if Length (R) > 0 then
+               Append (R, "&");
+            end if;
+            Append (R, Tok);
+         end if;
+      end Take;
+   begin
+      for I in Q'Range loop
+         if Q (I) = '&' then
+            Take (Q (Start .. I - 1));
+            Start := I + 1;
+         end if;
+      end loop;
+      Take (Q (Start .. Q'Last));
+      return To_String (R);
+   end Drop_Param;
+
    --  Verify a SigV4 Authorization header against the request and the demo
    --  credential. Anonymous is allowed unless DEZHAN_REQUIRE_AUTH is set.
    function Check_Auth
      (Head, Method, Path, Payload_Hash : String) return Auth_Status
    is
-      A : constant String := Header (Head, "Authorization");
-   begin
-      if A = "" then
-         return (if Require_Auth then Missing else Anon);
-      end if;
-      if Index (A, "AWS4-HMAC-SHA256") = 0 then
-         return Invalid;
-      end if;
-      declare
-         Cred    : constant String := Field_After (A, "Credential=");
-         SH      : constant String := Field_After (A, "SignedHeaders=");
-         Sig     : constant String := Field_After (A, "Signature=");
+      A     : constant String := Header (Head, "Authorization");
+      QPos  : constant Natural := Index (Path, "?");
+      Path0 : constant String :=
+        (if QPos = 0 then Path else Path (Path'First .. QPos - 1));
+      Query : constant String :=
+        (if QPos = 0 then "" else Path (QPos + 1 .. Path'Last));
+
+      --  Verify a parsed SigV4 against the request. Canon_Q is the canonical
+      --  query, Phash the payload hash to sign under.
+      function Verify_Sig
+        (Cred, SH, Sig, Canon_Q, Phash, Amz_Date : String) return Auth_Status
+      is
          AKID    : constant String := Part (Cred, '/', 1);
          SDate   : constant String := Part (Cred, '/', 2);
          Region  : constant String := Part (Cred, '/', 3);
          Service : constant String := Part (Cred, '/', 4);
-         QPos    : constant Natural := Index (Path, "?");
-         Path0   : constant String :=
-           (if QPos = 0 then Path else Path (Path'First .. QPos - 1));
-         Query   : constant String :=
-           (if QPos = 0 then "" else Path (QPos + 1 .. Path'Last));
          CH      : Unbounded_String;
          N       : Natural := 1;
       begin
@@ -587,16 +632,39 @@ procedure Dezhan_Server is
             end;
          end loop;
          if Dezhan.Sigv4.Signature_For
-              (Credentials.Element (AKID), Method, Path0,
-               Dezhan.Sigv4.Canonical_Query (Query),
-               To_String (CH), SH, Payload_Hash,
-               Header (Head, "x-amz-date"), SDate, Region, Service) = Sig
+              (Credentials.Element (AKID), Method, Path0, Canon_Q,
+               To_String (CH), SH, Phash, Amz_Date, SDate, Region, Service) = Sig
          then
             return Valid;
          else
             return Invalid;
          end if;
-      end;
+      end Verify_Sig;
+   begin
+      if A /= "" then
+         if Index (A, "AWS4-HMAC-SHA256") = 0 then
+            return Invalid;
+         end if;
+         return Verify_Sig
+           (Cred     => Field_After (A, "Credential="),
+            SH       => Field_After (A, "SignedHeaders="),
+            Sig      => Field_After (A, "Signature="),
+            Canon_Q  => Dezhan.Sigv4.Canonical_Query (Query),
+            Phash    => Payload_Hash,
+            Amz_Date => Header (Head, "x-amz-date"));
+      elsif Index (Query, "X-Amz-Signature=") /= 0 then
+         --  Presigned URL: SigV4 carried in the query string, payload unsigned.
+         return Verify_Sig
+           (Cred     => Pct_Decode (Q_Val (Query, "X-Amz-Credential=")),
+            SH       => Pct_Decode (Q_Val (Query, "X-Amz-SignedHeaders=")),
+            Sig      => Q_Val (Query, "X-Amz-Signature="),
+            Canon_Q  =>
+              Dezhan.Sigv4.Canonical_Query (Drop_Param (Query, "X-Amz-Signature")),
+            Phash    => "UNSIGNED-PAYLOAD",
+            Amz_Date => Q_Val (Query, "X-Amz-Date="));
+      else
+         return (if Require_Auth then Missing else Anon);
+      end if;
    end Check_Auth;
 
    ------------------------------------------------------------ S3 layer
@@ -633,28 +701,6 @@ procedure Dezhan_Server is
         & "Content-Length:" & Natural'Image (Length) & CRLF
         & Extra & "Connection: close" & CRLF & CRLF);
    end Send_Head;
-
-   function Pct_Decode (S : String) return String is
-      R : String (1 .. S'Length);
-      L : Natural := 0;
-      I : Natural := S'First;
-      function Nib (C : Character) return Natural is
-        (case C is
-            when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
-            when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
-            when 'A' .. 'F' => Character'Pos (C) - Character'Pos ('A') + 10,
-            when others     => 0);
-   begin
-      while I <= S'Last loop
-         if S (I) = '%' and then I + 2 <= S'Last then
-            L := L + 1; R (L) := Character'Val (Nib (S (I + 1)) * 16 + Nib (S (I + 2)));
-            I := I + 3;
-         else
-            L := L + 1; R (L) := S (I); I := I + 1;
-         end if;
-      end loop;
-      return R (1 .. L);
-   end Pct_Decode;
 
    function Pct_Encode (S : String) return String is
       Up : constant String := "0123456789ABCDEF";
@@ -1127,7 +1173,10 @@ procedure Dezhan_Server is
          declare
             Src : constant String := Header (Head, "x-amz-copy-source");
          begin
-            if Locked and then Bucket_Exists (V, Bucket)
+            if Header (Head, "If-None-Match") = "*" and then Contains (V, Name) then
+               --  Create-only PUT: the object already exists.
+               S3_Error (Ch, "412 Precondition Failed", "PreconditionFailed", Path0);
+            elsif Locked and then Bucket_Exists (V, Bucket)
               and then Contains (V, Name) and then not Object_Deletable (V, Name)
             then
                S3_Error (Ch, "403 Forbidden", "AccessDenied", Path0);
@@ -1177,6 +1226,20 @@ procedure Dezhan_Server is
             else
                S3_Error (Ch, "404 Not Found", "NoSuchKey", Path0);
             end if;
+         elsif Header (Head, "If-None-Match") /= ""
+           and then (Header (Head, "If-None-Match") = "*"
+                     or else Index (Header (Head, "If-None-Match"),
+                                    Object_Etag (V, Name)) /= 0)
+         then
+            --  Conditional GET: ETag unchanged.
+            Send_Text (Ch, "304 Not Modified", "",
+              Extra => "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF);
+         elsif Header (Head, "If-Match") /= ""
+           and then not (Header (Head, "If-Match") = "*"
+                         or else Index (Header (Head, "If-Match"),
+                                        Object_Etag (V, Name)) /= 0)
+         then
+            S3_Error (Ch, "412 Precondition Failed", "PreconditionFailed", Path0);
          else
             declare
                Lock_Hdr : constant String :=
