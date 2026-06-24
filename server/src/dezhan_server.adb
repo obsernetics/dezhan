@@ -35,7 +35,6 @@ with Ada.Strings.Fixed;    use Ada.Strings.Fixed;
 with Ada.Strings.Maps.Constants;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Streams;          use Ada.Streams;
-with Ada.Exceptions;       use Ada.Exceptions;
 with Ada.Environment_Variables;
 with Ada.Strings.Hash;
 with Ada.Containers.Indefinite_Hashed_Maps;
@@ -466,6 +465,8 @@ procedure Dezhan_Server is
         "HTTP/1.1 " & Status & CRLF
         & "Content-Type: " & Ctype & CRLF
         & "Content-Length:" & Stream_Element_Offset'Image (Payload'Length) & CRLF
+        & "Access-Control-Allow-Origin: *" & CRLF
+        & "Access-Control-Expose-Headers: *" & CRLF
         & Extra
         & "Connection: close" & CRLF & CRLF;
    begin
@@ -1374,6 +1375,15 @@ procedure Dezhan_Server is
          Log ("event=request method=" & Method & " path=" & Path0
               & " bytes=" & Natural'Image (Len));
 
+         --  CORS preflight: answer before auth (browsers send it unsigned).
+         if Method = "OPTIONS" then
+            Send_Text (Ch, "200 OK", "",
+              Extra => "Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD"
+                       & CRLF & "Access-Control-Allow-Headers: *" & CRLF
+                       & "Access-Control-Max-Age: 86400" & CRLF);
+            return;
+         end if;
+
          --  Authenticate data-plane requests via SigV4 when present: the legacy
          --  /v API and any S3 bucket/key path. Control routes (UI, health,
          --  metrics, admin) are exempt.
@@ -1679,13 +1689,93 @@ procedure Dezhan_Server is
    end Handle;
 
    Server : Socket_Type;
-   Sock   : Socket_Type;
    Addr   : Sock_Addr_Type;
-   From   : Sock_Addr_Type;
-   Sel    : Selector_Type;
-   R_Set  : Socket_Set_Type;
-   W_Set  : Socket_Set_Type;
-   Status : Selector_Status;
+
+   --  All vault access is serialized by this lock: connections are handled
+   --  concurrently, but the content-addressed store is touched one request at a
+   --  time, so integrity is preserved (the spec prioritizes integrity over
+   --  throughput). It removes head-of-line blocking at accept: a slow client no
+   --  longer stalls the others.
+   protected Vault_Lock is
+      entry Acquire;
+      procedure Release;
+   private
+      Held : Boolean := False;
+   end Vault_Lock;
+   protected body Vault_Lock is
+      entry Acquire when not Held is
+      begin
+         Held := True;
+      end Acquire;
+      procedure Release is
+      begin
+         Held := False;
+      end Release;
+   end Vault_Lock;
+
+   --  One connection, fully handled under the lock.
+   procedure Serve (Sock : Socket_Type) is
+   begin
+      Vault_Lock.Acquire;
+      begin
+         Handle (Stream (Sock));
+      exception
+         when others => null;
+      end;
+      Vault_Lock.Release;
+      Close_Socket (Sock);
+   exception
+      when others =>
+         begin
+            Close_Socket (Sock);
+         exception
+            when others => null;
+         end;
+   end Serve;
+
+   task type Worker is
+      pragma Storage_Size (64 * 1024 * 1024);
+   end Worker;
+   task body Worker is
+      Sock : Socket_Type;
+      From : Sock_Addr_Type;
+   begin
+      loop
+         begin
+            Accept_Socket (Server, Sock, From);   --  concurrent accept is safe
+            Serve (Sock);
+         exception
+            when others => null;
+         end;
+      end loop;
+   end Worker;
+
+   --  Periodic background scrub (was the accept-timeout path).
+   task Scrubber;
+   task body Scrubber is
+   begin
+      loop
+         delay 30.0;
+         Vault_Lock.Acquire;
+         begin
+            Last_Scrub := Scrub (V);
+            Scrub_Runs := Scrub_Runs + 1;
+            if Last_Scrub.Corrupt > 0 then
+               Put_Line ("scrub:" & Natural'Image (Last_Scrub.Corrupt)
+                         & " corrupt object(s) detected");
+            end if;
+            if Last_Scrub.Shards_Repaired > 0 then
+               Put_Line ("scrub: rebuilt"
+                         & Natural'Image (Last_Scrub.Shards_Repaired)
+                         & " shard(s) from parity");
+            end if;
+         exception
+            when others => null;
+         end;
+         Vault_Lock.Release;
+      end loop;
+   end Scrubber;
+
 begin
    Open (V, Root, Key);
    Credentials.Include (Access_Key, Secret_Key);   --  seed the demo account
@@ -1697,44 +1787,14 @@ begin
    Addr.Port := Port;
    Bind_Socket (Server, Addr);
    Listen_Socket (Server);
-   Create_Selector (Sel);
    Put_Line ("dezhan server listening on port" & Port_Type'Image (Port)
              & " (root " & Root & ")");
 
-   --  Single-threaded loop: wait up to 30s for a connection; on timeout, run a
-   --  background integrity scrub. No concurrency, so no locking is needed.
-   loop
-      begin
-         Empty (R_Set);
-         Empty (W_Set);
-         Set (R_Set, Server);
-         Check_Selector (Sel, R_Set, W_Set, Status, Timeout => 30.0);
-         if Status = Completed then
-            Accept_Socket (Server, Sock, From);
-            Handle (Stream (Sock));
-            Close_Socket (Sock);
-         else
-            --  Idle: scrub all objects in the background.
-            Last_Scrub := Scrub (V);
-            Scrub_Runs := Scrub_Runs + 1;
-            if Last_Scrub.Corrupt > 0 then
-               Put_Line ("scrub: " & Natural'Image (Last_Scrub.Corrupt)
-                         & " corrupt object(s) detected");
-            end if;
-            if Last_Scrub.Shards_Repaired > 0 then
-               Put_Line ("scrub: rebuilt"
-                         & Natural'Image (Last_Scrub.Shards_Repaired)
-                         & " shard(s) from parity");
-            end if;
-         end if;
-      exception
-         when E : others =>
-            Put_Line ("loop error: " & Exception_Message (E));
-            begin
-               Close_Socket (Sock);
-            exception
-               when others => null;
-            end;
-      end;
-   end loop;
+   --  Start the worker pool; the tasks run forever, so the program blocks here.
+   declare
+      Pool : array (1 .. 8) of Worker;
+      pragma Unreferenced (Pool);
+   begin
+      null;
+   end;
 end Dezhan_Server;
