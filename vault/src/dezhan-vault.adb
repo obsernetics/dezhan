@@ -68,10 +68,11 @@ package body Dezhan.Vault with SPARK_Mode => Off is
 
    --  Object versioning: per "bucket/key" history of versions.
    type Version_Entry is record
-      Vid  : Unbounded_String;       --  version id
-      Id   : Object_Id;              --  content-addressed object for this version
-      Size : Natural := 0;
-      Meta : Unbounded_String;       --  Content-Type / user metadata blob
+      Vid     : Unbounded_String;    --  version id
+      Id      : Object_Id;           --  content object for this version
+      Size    : Natural := 0;
+      Meta    : Unbounded_String;    --  Content-Type / user metadata blob
+      Deleted : Boolean := False;    --  delete marker (no content)
    end record;
    package Ver_Vecs is new Ada.Containers.Vectors (Natural, Version_Entry);
    package Ver_Maps is new Ada.Containers.Indefinite_Hashed_Maps
@@ -245,8 +246,11 @@ package body Dezhan.Vault with SPARK_Mode => Off is
             Name : constant String := Ver_Maps.Key (Cur);
          begin
             for E of Ver_Maps.Element (Cur) loop
+               --  Fields: VER name vid id size deleted meta-hex (meta last so an
+               --  empty value collapses harmlessly).
                Put_Line (F, "VER " & Str_To_Hex (Name) & " " & To_String (E.Vid)
                             & " " & String (E.Id) & Natural'Image (E.Size)
+                            & (if E.Deleted then " 1" else " 0")
                             & " " & Str_To_Hex (To_String (E.Meta)));
             end loop;
          end;
@@ -321,10 +325,11 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                declare
                   Name : constant String := Hex_To_Str (Field (Line, 2));
                   E    : constant Version_Entry :=
-                    (Vid  => To_Unbounded_String (Field (Line, 3)),
-                     Id   => Object_Id (Field (Line, 4)),
-                     Size => Natural'Value (Field (Line, 5)),
-                     Meta => To_Unbounded_String (Hex_To_Str (Field (Line, 6))));
+                    (Vid     => To_Unbounded_String (Field (Line, 3)),
+                     Id      => Object_Id (Field (Line, 4)),
+                     Size    => Natural'Value (Field (Line, 5)),
+                     Deleted => Field (Line, 6) = "1",
+                     Meta     => To_Unbounded_String (Hex_To_Str (Field (Line, 7))));
                   Vec  : Ver_Vecs.Vector;
                begin
                   if V.Self.Versions.Contains (Name) then
@@ -708,10 +713,11 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          Vid : constant String :=
            Trim (V.Self.Ver_Seq'Image, Ada.Strings.Both);
          E   : constant Version_Entry :=
-           (Vid  => To_Unbounded_String (Vid),
-            Id   => M.Id,
-            Size => M.Size,
-            Meta => M.User_Meta);
+           (Vid     => To_Unbounded_String (Vid),
+            Id      => M.Id,
+            Size    => M.Size,
+            Meta    => M.User_Meta,
+            Deleted => False);
          Vec : Ver_Vecs.Vector;
       begin
          if V.Self.Versions.Contains (Name) then
@@ -735,11 +741,88 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       end if;
       for E of V.Self.Versions.Element (Name) loop
          if To_String (E.Vid) = Vid then
+            if E.Deleted then
+               raise Not_Found;     --  a delete marker has no content
+            end if;
             return Get (To_String (V.Self.Root), V.Self.Key, E.Id);
          end if;
       end loop;
       raise Not_Found;
    end Get_Object_Version;
+
+   function Delete_Marker (V : in out Vault_Type; Name : String) return String is
+      Vec : Ver_Vecs.Vector;
+   begin
+      V.Self.Ver_Seq := V.Self.Ver_Seq + 1;
+      declare
+         Vid : constant String := Trim (V.Self.Ver_Seq'Image, Ada.Strings.Both);
+      begin
+         if V.Self.Versions.Contains (Name) then
+            Vec := V.Self.Versions.Element (Name);
+         end if;
+         Vec.Append (Version_Entry'
+           (Vid     => To_Unbounded_String (Vid),
+            Id      => (others => '0'),
+            Size    => 0,
+            Meta    => Null_Unbounded_String,
+            Deleted => True));
+         V.Self.Versions.Include (Name, Vec);
+         --  The key now reads as deleted; prior version objects are kept by the
+         --  version log (and by GC), so they remain retrievable by version id.
+         if V.Self.Index.Contains (Name) then
+            V.Self.Index.Delete (Name);
+         end if;
+         Add_Audit (V, Delete_Allowed, Name_Digest (Name), CG.Now (V.Self.Clock));
+         Save (V);
+         return Vid;
+      end;
+   end Delete_Marker;
+
+   procedure Delete_Version (V : in out Vault_Type; Name, Vid : String) is
+   begin
+      if not V.Self.Versions.Contains (Name) then
+         raise Not_Found;
+      end if;
+      declare
+         Vec : Ver_Vecs.Vector := V.Self.Versions.Element (Name);
+         Idx : Integer := -1;
+      begin
+         for I in Vec.First_Index .. Vec.Last_Index loop
+            if To_String (Vec.Element (I).Vid) = Vid then
+               Idx := I;
+            end if;
+         end loop;
+         if Idx < 0 then
+            raise Not_Found;
+         end if;
+         Vec.Delete (Idx);
+
+         --  Repoint the live key to the newest surviving real version, if any.
+         if V.Self.Index.Contains (Name) then
+            V.Self.Index.Delete (Name);
+         end if;
+         for I in reverse Vec.First_Index .. Vec.Last_Index loop
+            if not Vec.Element (I).Deleted then
+               declare
+                  E : constant Version_Entry := Vec.Element (I);
+               begin
+                  V.Self.Index.Include
+                    (Name, (Id => E.Id, Lock => Create_Lock (Governance, 0, 0),
+                            Composite => False, Quarantined => False,
+                            Size => E.Size, User_Meta => E.Meta));
+               end;
+               exit;
+            end if;
+         end loop;
+
+         if Vec.Is_Empty then
+            V.Self.Versions.Delete (Name);
+         else
+            V.Self.Versions.Include (Name, Vec);
+         end if;
+         Save (V);
+      end;
+   end Delete_Version;
 
    function List_Object_Versions (V : Vault_Type; Bucket : String) return String is
       Prefix : constant String := Bucket & "/";
@@ -759,7 +842,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                   for E of Ver_Maps.Element (Cur) loop
                      Append (R, Key & ASCII.HT & To_String (E.Vid) & ASCII.HT
                        & Trim (E.Size'Image, Ada.Strings.Both) & ASCII.HT
-                       & String (E.Id) & ASCII.LF);
+                       & String (E.Id) & ASCII.HT
+                       & (if E.Deleted then "1" else "0") & ASCII.LF);
                   end loop;
                end;
             end if;

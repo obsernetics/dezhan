@@ -1003,15 +1003,31 @@ procedure Dezhan_Server is
                           (if T1 = 0 then 0 else Index (Ln (T1 + 1 .. Ln'Last), (1 => ASCII.HT)));
                         T3 : constant Natural :=
                           (if T2 = 0 then 0 else Index (Ln (T2 + 1 .. Ln'Last), (1 => ASCII.HT)));
+                        T4 : constant Natural :=
+                          (if T3 = 0 then 0 else Index (Ln (T3 + 1 .. Ln'Last), (1 => ASCII.HT)));
                      begin
-                        if T1 /= 0 and then T2 /= 0 and then T3 /= 0 then
-                           Append (Body_S, "<Version><Key>"
-                             & Xml_Escape (Ln (Ln'First .. T1 - 1)) & "</Key><VersionId>"
-                             & Ln (T1 + 1 .. T2 - 1) & "</VersionId><IsLatest>false</IsLatest>"
-                             & "<LastModified>" & Epoch_Date & "</LastModified><ETag>&quot;"
-                             & Ln (T3 + 1 .. Ln'Last) & "&quot;</ETag><Size>"
-                             & Ln (T2 + 1 .. T3 - 1) & "</Size>"
-                             & "<StorageClass>STANDARD</StorageClass></Version>");
+                        if T1 /= 0 and then T2 /= 0 and then T3 /= 0 and then T4 /= 0 then
+                           declare
+                              K   : constant String := Xml_Escape (Ln (Ln'First .. T1 - 1));
+                              Vid : constant String := Ln (T1 + 1 .. T2 - 1);
+                              Sz  : constant String := Ln (T2 + 1 .. T3 - 1);
+                              Et  : constant String := Ln (T3 + 1 .. T4 - 1);
+                              Del : constant Boolean := Ln (T4 + 1 .. Ln'Last) = "1";
+                           begin
+                              if Del then
+                                 Append (Body_S, "<DeleteMarker><Key>" & K
+                                   & "</Key><VersionId>" & Vid
+                                   & "</VersionId><IsLatest>false</IsLatest><LastModified>"
+                                   & Epoch_Date & "</LastModified></DeleteMarker>");
+                              else
+                                 Append (Body_S, "<Version><Key>" & K
+                                   & "</Key><VersionId>" & Vid
+                                   & "</VersionId><IsLatest>false</IsLatest><LastModified>"
+                                   & Epoch_Date & "</LastModified><ETag>&quot;" & Et
+                                   & "&quot;</ETag><Size>" & Sz
+                                   & "</Size><StorageClass>STANDARD</StorageClass></Version>");
+                              end if;
+                           end;
                         end if;
                      end;
                      I := E + 1;
@@ -1289,7 +1305,21 @@ procedure Dezhan_Server is
          end if;
 
       elsif Method = "DELETE" then
-         if not Contains (V, Name) then
+         if Q_Val (Query, "versionId=") /= "" then
+            --  Permanently remove a specific version.
+            Delete_Version (V, Name, Q_Val (Query, "versionId="));
+            Send_Text (Ch, "204 No Content", "",
+              Extra => "x-amz-version-id: " & Q_Val (Query, "versionId=") & CRLF);
+         elsif Bucket_Versioned (V, Bucket) then
+            --  Versioned bucket: a plain DELETE writes a delete marker.
+            declare
+               Vid : constant String := Delete_Marker (V, Name);
+            begin
+               Send_Text (Ch, "204 No Content", "",
+                 Extra => "x-amz-delete-marker: true" & CRLF
+                          & "x-amz-version-id: " & Vid & CRLF);
+            end;
+         elsif not Contains (V, Name) then
             Send_Text (Ch, "204 No Content", "");   --  S3 delete is idempotent
          elsif Delete_Object (V, Name,
                  Bypass => Header (Head, "X-Dezhan-Bypass") = "true")
