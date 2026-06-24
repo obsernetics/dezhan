@@ -619,6 +619,15 @@ procedure Dezhan_Server is
       Send (Ch, Status, "application/xml", To_SEA (Body_Str));
    end Send_XML;
 
+   function To_Str (D : Stream_Element_Array) return String is
+      R : String (1 .. Natural (D'Length));
+   begin
+      for I in R'Range loop
+         R (I) := Character'Val (Natural (D (D'First + Stream_Element_Offset (I - 1))));
+      end loop;
+      return R;
+   end To_Str;
+
    procedure S3_Error (Ch : Stream_Access; Status, Code, Resource : String) is
    begin
       Send_XML (Ch, Status,
@@ -803,6 +812,67 @@ procedure Dezhan_Server is
 
       --  Bucket-level operations (no key).
       if Key = "" then
+         if Method = "GET" and then Index (Query, "location") /= 0 then
+            Send_XML (Ch, "200 OK",
+              "<?xml version=""1.0"" encoding=""UTF-8""?>"
+              & "<LocationConstraint xmlns=""http://s3.amazonaws.com/doc/2006-03-01/""/>");
+            return;
+         elsif Index (Query, "tagging") /= 0 then
+            if Method = "GET" then
+               Send_XML (Ch, "200 OK",
+                 "<?xml version=""1.0"" encoding=""UTF-8""?><Tagging><TagSet/></Tagging>");
+            else
+               Send_Text (Ch, "204 No Content", "");
+            end if;
+            return;
+         elsif Method = "POST" and then Index (Query, "delete") /= 0 then
+            declare
+               Body_S : constant String := To_Str (Data);
+               Res    : Unbounded_String;
+               P      : Natural := Body_S'First;
+            begin
+               loop
+                  declare
+                     A : constant Natural := Index (Body_S (P .. Body_S'Last), "<Key>");
+                  begin
+                     exit when A = 0;
+                     declare
+                        E : constant Natural :=
+                          Index (Body_S (A .. Body_S'Last), "</Key>");
+                     begin
+                        exit when E = 0;
+                        declare
+                           K     : constant String := Body_S (A + 5 .. E - 1);
+                           Iname : constant String := Bucket & "/" & K;
+                           Done  : Boolean := True;
+                        begin
+                           begin
+                              if Contains (V, Iname)
+                                and then not Delete_Object (V, Iname, Bypass => False)
+                              then
+                                 Done := False;
+                              end if;
+                           exception
+                              when others => Done := False;
+                           end;
+                           if Done then
+                              Append (Res, "<Deleted><Key>" & Xml_Escape (K)
+                                & "</Key></Deleted>");
+                           else
+                              Append (Res, "<Error><Key>" & Xml_Escape (K)
+                                & "</Key><Code>AccessDenied</Code></Error>");
+                           end if;
+                        end;
+                        P := E + 6;
+                     end;
+                  end;
+               end loop;
+               Send_XML (Ch, "200 OK",
+                 "<?xml version=""1.0"" encoding=""UTF-8""?><DeleteResult>"
+                 & To_String (Res) & "</DeleteResult>");
+            end;
+            return;
+         end if;
          if Method = "PUT" then
             if Bucket_Exists (V, Bucket) then
                S3_Error (Ch, "409 Conflict", "BucketAlreadyOwnedByYou", Path0);
@@ -836,6 +906,16 @@ procedure Dezhan_Server is
       --  Object-level operations.
       if not Bucket_Exists (V, Bucket) then
          S3_Error (Ch, "404 Not Found", "NoSuchBucket", Path0);
+         return;
+      end if;
+
+      if Index (Query, "tagging") /= 0 then
+         if Method = "GET" then
+            Send_XML (Ch, "200 OK",
+              "<?xml version=""1.0"" encoding=""UTF-8""?><Tagging><TagSet/></Tagging>");
+         else
+            Send_Text (Ch, "204 No Content", "");
+         end if;
          return;
       end if;
 
@@ -1000,11 +1080,16 @@ procedure Dezhan_Server is
          Log ("event=request method=" & Method & " path=" & Path0
               & " bytes=" & Natural'Image (Len));
 
-         --  Authenticate data-plane (/v) requests via SigV4 when present.
-         if Path = "/v"
-           or else (Path'Length >= 3
-                    and then Path (Path'First .. Path'First + 2) = "/v/")
-         then
+         --  Authenticate data-plane requests via SigV4 when present: the legacy
+         --  /v API and any S3 bucket/key path. Control routes (UI, health,
+         --  metrics, admin) are exempt.
+         declare
+            Is_Control : constant Boolean :=
+              Path0 = "/" or else Path0 = "/healthz" or else Path0 = "/metrics"
+              or else (Path0'Length >= 6
+                       and then Path0 (Path0'First .. Path0'First + 5) = "/admin");
+         begin
+         if not Is_Control then
             declare
                Payload_Hash : constant String :=
                  (if Header (Head, "x-amz-content-sha256") /= ""
@@ -1022,6 +1107,7 @@ procedure Dezhan_Server is
                end if;
             end;
          end if;
+         end;
 
          if Method = "GET" and then Path = "/" then
             --  S3 clients (signed/x-amz) get ListBuckets; browsers get the UI.
