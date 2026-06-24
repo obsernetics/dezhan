@@ -1,110 +1,115 @@
 # dezhan
 
-dezhan is a secure backup vault. It replaces Veeam and MinIO with one system: an
-immutable, air-gapped, S3-compatible object store built for banking-grade
-security and stability, where the integrity-critical core is formally verified
-in SPARK (machine-proved, not just tested).
+A secure, immutable backup vault that speaks S3. Point any S3 client or backup
+tool at it (aws-cli, restic, Veeam, Velero, boto3) and your data is stored
+content-addressed, encrypted, erasure-coded, and optionally WORM-locked so it
+cannot be modified or deleted before its retention expires.
 
-- **Immutable by construction.** WORM retention with compliance and governance
-  locks and legal hold. A retained object cannot be deleted before expiry, and a
-  manipulated system clock cannot expire it.
-- **S3-compatible.** PUT/GET/HEAD/DELETE, multipart upload, listing, and AWS
-  SigV4 auth, so existing backup tools and clients work unchanged.
-- **Verifiable integrity.** Every object is content-addressed, erasure-coded, and
-  continuously scrubbed and self-healed; the trusted core's invariants are proved
-  with `gnatprove`.
-- **Authenticated encryption.** Objects are encrypt-then-MAC with key separation
-  (ChaCha20 plus a keyed HMAC-SHA256 tag); a wrong key or any tampering is
-  cryptographically rejected. The key is derived from a passphrase with
-  PBKDF2-HMAC-SHA256 over a per-vault salt.
-- **Air-gapped.** One-way ingest, sync windows, an operator seal, and
-  technology-break export for offline isolation.
+It is a drop-in replacement for the storage target of Veeam and MinIO, with the
+integrity-critical core formally verified in SPARK.
 
-## Assurance
+## Quick start
 
-The integrity-critical core is written in SPARK and discharged by `gnatprove`
-with 325 checks and 0 unproved:
-
-- **Retention State Machine.** Retention can be extended but never shortened. In
-  compliance mode a retained object cannot be deleted before expiry, with no
-  override; governance mode allows only an audited bypass; a legal hold blocks
-  deletion absolutely (even past expiry, even under a bypass) until released.
-- **Clock Integrity Guard.** Trusted time advances only by a monotonic clock and
-  is provably independent of the system clock, so moving the clock cannot expire
-  a lock.
-- **Audit Chain.** An append-only, hash-chained log (in-tree SHA-256). A past
-  entry cannot be altered without breaking the link to its successor. Heads can
-  be sealed with Ed25519 signed checkpoints, and a standalone tool
-  (`dezhan_verify`) re-verifies the chain and checkpoint independently.
-- **Erasure Coding.** Systematic Reed-Solomon over GF(2^8). Any K of the N shards
-  reconstruct the original data.
-
-The cryptographic primitives (SHA-256, SHA-512, ChaCha20, HMAC-SHA256, Ed25519)
-are in-tree with no external dependency, validated against published test vectors;
-SHA-256/512, ChaCha20, and HMAC are also SPARK-proved free of run-time errors.
-
-## Platform
-
-On top of the verified core, dezhan runs an end-to-end S3 service:
-
-- **Storage** (`Dezhan.Storage.Cas`): content-addressed chunks, deduplication,
-  in-tree DEFLATE compression (`Dezhan.Storage.Deflate`, RFC 1951), authenticated
-  encryption at source (ChaCha20 encrypt-then-MAC with key separation and a keyed
-  HMAC-SHA256 tag per object, under a per-object convergent nonce), and
-  Reed-Solomon erasure coding (4 data + 2 parity per chunk). A background scrub
-  verifies every shard, rebuilds missing or corrupt ones from parity, and
-  quarantines anything beyond repair.
-- **Vault** (`Dezhan.Vault`): WORM orchestration tying storage, retention, clock,
-  and audit together, with multipart uploads, garbage collection, legal hold, and
-  air-gap modes. State is persisted, so the vault survives a restart.
-- **Server** (`dezhan_server`): an S3-compatible HTTP API on `GNAT.Sockets` with
-  no external dependency, validated against the AWS SDK (boto3). Path-style
-  buckets and objects (create/head/delete bucket, ListBuckets, ListObjectsV2
-  with prefix/delimiter, PUT/GET/HEAD/DELETE, byte-range reads, CopyObject, batch
-  delete, S3-XML multipart), object versioning (ListObjectVersions, GET by
-  versionId), Content-Type and user metadata, conditional requests
-  (If-None-Match/If-Match), AWS SigV4 in both header and presigned-URL form, and
-  object-lock buckets enforcing WORM. Prometheus `/metrics`, `/healthz`, and a
-  minimal web UI. Responses use S3 XML and `<Error>` bodies.
-- **CLI** (`dezhan_cli`): a thin signed client, including `sput` for a
-  SigV4-signed PUT.
-
-See [`docs/SPEC.md`](docs/SPEC.md) for the specification (the source of truth) and
-[`docs/NOTES.md`](docs/NOTES.md) for the roadmap and current limitations.
-
-## Build and verify
-
-Requires the Ada/SPARK toolchain (GNAT, `gprbuild`, and `gnatprove`, for example
-installed with [Alire](https://alire.ada.dev)).
+Build (needs the Ada/SPARK toolchain, e.g. via [Alire](https://alire.ada.dev)):
 
 ```sh
-cd trusted_core
-gprbuild -P dezhan_trusted_core.gpr                          # build the library
-gprbuild -P tests/tests.gpr                                  # build the tests
-gnatprove -P dezhan_trusted_core.gpr --level=2 --report=all  # prove the invariants
-./tests/obj/test_retention && ./tests/obj/test_clock_guard   # run the tests
+gprbuild -P server/dezhan_server.gpr      # the S3 server
+gprbuild -P cli/dezhan_cli.gpr            # optional CLI
 ```
 
-## Run
+Run the server (`<port> <data-dir>`):
 
 ```sh
-gprbuild -P server/dezhan_server.gpr
-server/obj/dezhan_server 8080 /tmp/dezhan-vault   # then open http://localhost:8080/
+export DEZHAN_VAULT_KEY="a-strong-passphrase"   # encrypts data at rest
+export DEZHAN_REQUIRE_AUTH=1                     # require signed requests
+server/obj/dezhan_server 8080 /var/lib/dezhan
 ```
 
-## Layout
+On first start it generates a random data key wrapped under your passphrase and
+prints `dezhan server listening on port 8080`.
 
+## Use it with the AWS CLI
+
+```sh
+aws configure set aws_access_key_id     dezhanadmin
+aws configure set aws_secret_access_key dezhandemosecretkey0123456789
+aws configure set default.s3.addressing_style path
+
+ALIAS="aws --endpoint-url http://localhost:8080 --region us-east-1"
+
+$ALIAS s3 mb s3://backups                  # create a bucket
+$ALIAS s3 cp ./data.tar s3://backups/      # upload (any size; multipart handled)
+$ALIAS s3 ls s3://backups/                 # list
+$ALIAS s3 cp s3://backups/data.tar ./      # download
 ```
-docs/SPEC.md    specification (source of truth)
-docs/NOTES.md   roadmap and current limitations
-docs/design/    per-unit design documents
-trusted_core/   SPARK-verified core (src/) and tests (tests/)
-storage/        content-addressed storage engine (Ada)
-vault/          WORM orchestration over the trusted core (Ada)
-server/         HTTP/S3-style server + web UI (Ada, GNAT.Sockets)
-cli/            command-line client (Ada)
-auth/           AWS SigV4 signing, PBKDF2 KDF, key wrapping (Ada, on verified HMAC)
-verifier/       standalone audit-chain verifier (Ada, on the verified Verify_Chain)
+
+(Use your own keys via `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET` when starting the
+server.)
+
+## Use it with restic
+
+```sh
+export AWS_ACCESS_KEY_ID=dezhanadmin
+export AWS_SECRET_ACCESS_KEY=dezhandemosecretkey0123456789
+restic -r s3:http://localhost:8080/backups init
+restic -r s3:http://localhost:8080/backups backup ~/documents
 ```
+
+## Make a bucket immutable (WORM / Object Lock)
+
+```sh
+# objects in this bucket cannot be overwritten or deleted before they expire
+$ALIAS s3api create-bucket --bucket vault --object-lock-enabled-for-bucket
+$ALIAS s3 cp important.bak s3://vault/
+$ALIAS s3 rm s3://vault/important.bak      # -> denied (403) until retention expires
+```
+
+Retention is enforced by a formally verified state machine, and a manipulated
+system clock cannot expire a lock.
+
+## What works
+
+Standard S3, validated against the AWS SDK (boto3):
+
+- Buckets: create / head / delete / list, location, versioning, object-lock config
+- Objects: put, get, head, delete, byte-range reads, copy, batch delete
+- Large objects and multipart uploads
+- Versioning with delete markers (`GET`/`DELETE` by version id, list versions)
+- Content-Type and user metadata (`x-amz-meta-*`)
+- Conditional requests (`If-None-Match` / `If-Match`)
+- Presigned URLs, and SigV4 auth (header and query forms)
+- Object Lock / WORM, legal hold, and audited retention
+
+## Configuration
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `DEZHAN_VAULT_KEY` | passphrase the data key is wrapped under | `dezhan-demo-vault-key` |
+| `DEZHAN_NEW_VAULT_KEY` | set to rotate the passphrase on startup | (unset) |
+| `DEZHAN_REQUIRE_AUTH` | reject unsigned requests when set | (unset = anonymous) |
+| `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET` | the S3 credential | `dezhanadmin` / demo secret |
+| `DEZHAN_CREDENTIALS` | extra `accesskey secret` lines, one per account | `<root>/credentials` |
+| `DEZHAN_KDF_ITERS` | PBKDF2 work factor | `200000` |
+
+Server arguments: `dezhan_server [port] [data-dir]` (defaults `8080`,
+`/tmp/dezhan-vault`).
+
+## Operations
+
+- `GET /healthz` - liveness (`ok` or `sealed`)
+- `GET /metrics` - Prometheus metrics (objects, storage bytes, scrub status, air-gap state, ...)
+- `POST /admin/seal` - make the vault read-only
+- `POST /admin/scrub` - verify and self-heal every object now
+- `POST /admin/checkpoint` - sign the audit head; `dezhan_verify <data-dir>` re-checks it offline
+- A web UI is served at `/`
+
+## How it works
+
+Provable immutability is the point: the retention state machine, clock-integrity
+guard, append-only audit chain, and erasure coding are written in SPARK and
+machine-checked by `gnatprove` (325 checks, 0 unproved). The cryptography
+(SHA-256/512, ChaCha20, HMAC-SHA256, Ed25519) is in-tree with no external
+dependency. See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
+[`docs/NOTES.md`](docs/NOTES.md) for design notes and current limitations.
 
 Licensed under Apache-2.0.
