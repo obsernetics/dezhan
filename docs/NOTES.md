@@ -44,12 +44,17 @@ finished, verified work. Keep it current as the trusted core grows.
 
 ## Future improvements (per docs/SPEC.md, deferred by scope)
 
-Trusted core (all four units implemented and verified): the standalone
-independent audit verifier is implemented (`verifier/`, `dezhan_verify <root>`):
-it re-parses `<root>/vault.state`, rebuilds the audit log, and re-checks it with
-the SPARK-proven `Verify_Chain`, sharing no code with the vault writer (a flipped
-field, forged hash, or re-linked entry all fail; exit 0 valid, 1 otherwise). The
-remaining Audit Chain extra is signed checkpoints (Ed25519 plus key management).
+Trusted core: all four units plus both Audit Chain extras are implemented.
+The standalone independent audit verifier (`verifier/`, `dezhan_verify <root>`)
+re-parses `<root>/vault.state`, rebuilds the audit log, and re-checks it with the
+SPARK-proven `Verify_Chain`, sharing no code with the vault writer (a flipped
+field, forged hash, or re-linked entry all fail; exit 0 valid, 1 otherwise).
+Signed checkpoints are implemented with in-tree SHA-512 (FIPS 180-4,
+SPARK-proved) and Ed25519 (RFC 8032, a TweetNaCl port, validated against test
+vectors): the vault signs the audit head (`Make_Checkpoint`, `POST
+/admin/checkpoint`) with a key derived from the vault key, and the verifier
+checks the signature against the published public key. Remaining key-management
+nicety: an operator-held (rather than vault-derived) checkpoint key and escrow.
 
 Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
 
@@ -115,9 +120,13 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   is fsynced (`Dezhan.Platform.Sync`, an audited libc FFI), so a crash leaves
   either the old or the new complete state, never a partial file. The on-disk
   format is text (a binary format is optional and not required for durability).
-  Still to do: AWS SigV4 authentication, multipart
-  uploads, S3 bucket/prefix semantics (a flat object list exists via GET /v),
-concurrency (the server is single-threaded). SigV4 authentication is implemented
+  An S3-compatible API is implemented (path-style buckets and objects,
+  ListBuckets/ListObjectsV2 XML, CopyObject, batch delete, S3-XML multipart,
+  object-lock buckets enforcing WORM, S3 `<Error>` bodies); the legacy flat `/v`
+  API remains. Still to do on the S3 layer: SigV4 enforcement on bucket/key paths
+  (today only `/v` is gated; S3 paths are anonymous unless behind a proxy), the
+  MinIO admin/IAM surface, lifecycle, and CORS. The server stays single-threaded.
+  SigV4 authentication is implemented
 and enforced: the signing core (`Dezhan.Sigv4`, on the RFC 4231-validated
 `Dezhan.Trusted_Core.HMAC`) is validated byte-for-byte against the AWS worked
 example; the server verifies an `AWS4-HMAC-SHA256` Authorization header on `/v`

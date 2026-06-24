@@ -23,7 +23,7 @@ in SPARK (machine-proved, not just tested).
 ## Assurance
 
 The integrity-critical core is written in SPARK and discharged by `gnatprove`
-with 270 checks and 0 unproved:
+with 325 checks and 0 unproved:
 
 - **Retention State Machine.** Retention can be extended but never shortened. In
   compliance mode a retained object cannot be deleted before expiry, with no
@@ -33,12 +33,15 @@ with 270 checks and 0 unproved:
   is provably independent of the system clock, so moving the clock cannot expire
   a lock.
 - **Audit Chain.** An append-only, hash-chained log (in-tree SHA-256). A past
-  entry cannot be altered without breaking the link to its successor.
+  entry cannot be altered without breaking the link to its successor. Heads can
+  be sealed with Ed25519 signed checkpoints, and a standalone tool
+  (`dezhan_verify`) re-verifies the chain and checkpoint independently.
 - **Erasure Coding.** Systematic Reed-Solomon over GF(2^8). Any K of the N shards
   reconstruct the original data.
 
-The cryptographic primitives (SHA-256, ChaCha20, HMAC-SHA256) are in-tree with no
-external dependency, validated against published test vectors.
+The cryptographic primitives (SHA-256, SHA-512, ChaCha20, HMAC-SHA256, Ed25519)
+are in-tree with no external dependency, validated against published test vectors;
+SHA-256/512, ChaCha20, and HMAC are also SPARK-proved free of run-time errors.
 
 ## Platform
 
@@ -54,9 +57,12 @@ On top of the verified core, dezhan runs an end-to-end S3 service:
 - **Vault** (`Dezhan.Vault`): WORM orchestration tying storage, retention, clock,
   and audit together, with multipart uploads, garbage collection, legal hold, and
   air-gap modes. State is persisted, so the vault survives a restart.
-- **Server** (`dezhan_server`): an HTTP/S3-style API on `GNAT.Sockets` with no
-  external dependency, AWS SigV4 auth, Prometheus `/metrics`, `/healthz`, and a
-  minimal web UI.
+- **Server** (`dezhan_server`): an S3-compatible HTTP API on `GNAT.Sockets` with
+  no external dependency. Path-style buckets and objects (create/head/delete
+  bucket, ListBuckets, ListObjectsV2 with prefix/delimiter, PUT/GET/HEAD/DELETE,
+  byte-range reads, CopyObject, batch delete, S3-XML multipart) with object-lock
+  buckets enforcing WORM, plus AWS SigV4 auth, Prometheus `/metrics`, `/healthz`,
+  and a minimal web UI. Responses use S3 XML and `<Error>` bodies.
 - **CLI** (`dezhan_cli`): a thin signed client, including `sput` for a
   SigV4-signed PUT.
 
