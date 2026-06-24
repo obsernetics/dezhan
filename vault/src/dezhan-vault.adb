@@ -389,6 +389,10 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Retain_For : Trusted_Time;
       User_Meta  : String := "")
    is
+      --  Part size for the large-object fallback: comfortably under the single
+      --  -manifest cap (a part of this size yields ~220 chunks).
+      Part_Size : constant := 900_000;
+      Root      : constant String := To_String (V.Self.Root);
    begin
       Check_Ingest (V);
       if Mode = Unlocked then
@@ -396,13 +400,52 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       end if;
       declare
          At_Time : constant Trusted_Time := CG.Now (V.Self.Clock);
-         Id      : constant Object_Id :=
-           Put (To_String (V.Self.Root), V.Self.Key, Data);
          Lock    : constant Retention_Lock :=
            Create_Lock (Mode, At_Time + Retain_For, At_Time);
+         Obj_Id  : Object_Id;
+         Comp    : Boolean := False;
       begin
+         begin
+            Obj_Id := Put (Root, V.Self.Key, Data);
+         exception
+            when Object_Too_Large =>
+               --  Too big for one manifest: split into parts and store a
+               --  composite (same shape as a completed multipart upload).
+               Comp := True;
+               declare
+                  N_Parts : constant Natural :=
+                    (Natural (Data'Length) + Part_Size - 1) / Part_Size;
+                  List    : Stream_Element_Array
+                              (1 .. Stream_Element_Offset (N_Parts * 64));
+                  LPos    : Stream_Element_Offset := 1;
+               begin
+                  for P in 0 .. N_Parts - 1 loop
+                     declare
+                        F   : constant Stream_Element_Offset :=
+                          Data'First + Stream_Element_Offset (P * Part_Size);
+                        L   : Stream_Element_Offset := F + Part_Size - 1;
+                     begin
+                        if L > Data'Last then
+                           L := Data'Last;
+                        end if;
+                        declare
+                           Pid : constant Object_Id :=
+                             Put (Root, V.Self.Key, Data (F .. L));
+                        begin
+                           for I in 0 .. 63 loop
+                              List (LPos) :=
+                                Stream_Element (Character'Pos (Pid (Pid'First + I)));
+                              LPos := LPos + 1;
+                           end loop;
+                        end;
+                     end;
+                  end loop;
+                  Obj_Id := Put (Root, V.Self.Key, List);
+               end;
+         end;
+
          V.Self.Index.Include
-           (Name, (Id => Id, Lock => Lock, Composite => False,
+           (Name, (Id => Obj_Id, Lock => Lock, Composite => Comp,
                    Quarantined => False, Size => Natural (Data'Length),
                    User_Meta => To_Unbounded_String (User_Meta)));
          Add_Audit (V, Lock_Created, Name_Digest (Name), At_Time + Retain_For);
