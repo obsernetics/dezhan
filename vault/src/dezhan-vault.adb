@@ -60,10 +60,24 @@ package body Dezhan.Vault with SPARK_Mode => Off is
      (Key_Type => String, Element_Type => Upload,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
-   --  S3 buckets: name -> object-lock-enabled (immutable) flag.
+   --  S3 buckets: name -> object-lock-enabled (immutable) flag. The same map
+   --  type also tracks the versioning-enabled set.
    package Bucket_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => Boolean,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
+   --  Object versioning: per "bucket/key" history of versions.
+   type Version_Entry is record
+      Vid  : Unbounded_String;       --  version id
+      Id   : Object_Id;              --  content-addressed object for this version
+      Size : Natural := 0;
+      Meta : Unbounded_String;       --  Content-Type / user metadata blob
+   end record;
+   package Ver_Vecs is new Ada.Containers.Vectors (Natural, Version_Entry);
+   package Ver_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Ver_Vecs.Vector,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=",
+      "=" => Ver_Vecs."=");
 
    type State is record
       Root       : Unbounded_String;
@@ -79,6 +93,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Uploads    : Upload_Maps.Map;  --  in-flight multipart uploads (transient)
       Upload_Seq : Natural := 0;
       Buckets    : Bucket_Maps.Map;
+      Versioned  : Bucket_Maps.Map;  --  buckets with versioning enabled
+      Versions   : Ver_Maps.Map;     --  "bucket/key" -> version history
+      Ver_Seq    : Natural := 0;     --  monotonic version-id source
    end record;
 
    --  Writes are refused only by an operator seal (air-gap read-only). A clock
@@ -217,6 +234,23 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          Put_Line (F, "BKT " & Str_To_Hex (Bucket_Maps.Key (Cur))
                       & (if Bucket_Maps.Element (Cur) then " 1" else " 0"));
       end loop;
+      for Cur in V.Self.Versioned.Iterate loop
+         if Bucket_Maps.Element (Cur) then
+            Put_Line (F, "VSN " & Str_To_Hex (Bucket_Maps.Key (Cur)));
+         end if;
+      end loop;
+      Put_Line (F, "VSEQ" & Natural'Image (V.Self.Ver_Seq));
+      for Cur in V.Self.Versions.Iterate loop
+         declare
+            Name : constant String := Ver_Maps.Key (Cur);
+         begin
+            for E of Ver_Maps.Element (Cur) loop
+               Put_Line (F, "VER " & Str_To_Hex (Name) & " " & To_String (E.Vid)
+                            & " " & String (E.Id) & Natural'Image (E.Size)
+                            & " " & Str_To_Hex (To_String (E.Meta)));
+            end loop;
+         end;
+      end loop;
       for Cur in V.Self.Index.Iterate loop
          declare
             Name : constant String := Meta_Maps.Key (Cur);
@@ -279,6 +313,26 @@ package body Dezhan.Vault with SPARK_Mode => Off is
             elsif Tag = "BKT" then
                V.Self.Buckets.Include
                  (Hex_To_Str (Field (Line, 2)), Field (Line, 3) = "1");
+            elsif Tag = "VSN" then
+               V.Self.Versioned.Include (Hex_To_Str (Field (Line, 2)), True);
+            elsif Tag = "VSEQ" then
+               V.Self.Ver_Seq := Natural'Value (Field (Line, 2));
+            elsif Tag = "VER" then
+               declare
+                  Name : constant String := Hex_To_Str (Field (Line, 2));
+                  E    : constant Version_Entry :=
+                    (Vid  => To_Unbounded_String (Field (Line, 3)),
+                     Id   => Object_Id (Field (Line, 4)),
+                     Size => Natural'Value (Field (Line, 5)),
+                     Meta => To_Unbounded_String (Hex_To_Str (Field (Line, 6))));
+                  Vec  : Ver_Vecs.Vector;
+               begin
+                  if V.Self.Versions.Contains (Name) then
+                     Vec := V.Self.Versions.Element (Name);
+                  end if;
+                  Vec.Append (E);
+                  V.Self.Versions.Include (Name, Vec);
+               end;
             elsif Tag = "OBJ" then
                V.Self.Index.Include
                  (Hex_To_Str (Field (Line, 2)),
@@ -592,6 +646,85 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       return To_String (R);
    end List_Buckets;
 
+   procedure Set_Versioning
+     (V : in out Vault_Type; Bucket : String; On : Boolean) is
+   begin
+      V.Self.Versioned.Include (Bucket, On);
+      Save (V);
+   end Set_Versioning;
+
+   function Bucket_Versioned (V : Vault_Type; Bucket : String) return Boolean is
+     (V.Self.Versioned.Contains (Bucket)
+      and then V.Self.Versioned.Element (Bucket));
+
+   function Record_Version (V : in out Vault_Type; Name : String) return String is
+      M   : constant Meta := V.Self.Index.Element (Name);
+   begin
+      V.Self.Ver_Seq := V.Self.Ver_Seq + 1;
+      declare
+         Vid : constant String :=
+           Trim (V.Self.Ver_Seq'Image, Ada.Strings.Both);
+         E   : constant Version_Entry :=
+           (Vid  => To_Unbounded_String (Vid),
+            Id   => M.Id,
+            Size => M.Size,
+            Meta => M.User_Meta);
+         Vec : Ver_Vecs.Vector;
+      begin
+         if V.Self.Versions.Contains (Name) then
+            Vec := V.Self.Versions.Element (Name);
+         end if;
+         Vec.Append (E);
+         V.Self.Versions.Include (Name, Vec);
+         Save (V);
+         return Vid;
+      end;
+   end Record_Version;
+
+   function Get_Object_Version
+     (V : Vault_Type; Name, Vid : String) return Stream_Element_Array is
+   begin
+      if V.Self.Ingest_Only then
+         raise Egress_Denied;
+      end if;
+      if not V.Self.Versions.Contains (Name) then
+         raise Not_Found;
+      end if;
+      for E of V.Self.Versions.Element (Name) loop
+         if To_String (E.Vid) = Vid then
+            return Get (To_String (V.Self.Root), V.Self.Key, E.Id);
+         end if;
+      end loop;
+      raise Not_Found;
+   end Get_Object_Version;
+
+   function List_Object_Versions (V : Vault_Type; Bucket : String) return String is
+      Prefix : constant String := Bucket & "/";
+      R      : Unbounded_String;
+   begin
+      for Cur in V.Self.Versions.Iterate loop
+         declare
+            Name : constant String := Ver_Maps.Key (Cur);
+         begin
+            if Name'Length >= Prefix'Length
+              and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix
+            then
+               declare
+                  Key : constant String :=
+                    Name (Name'First + Prefix'Length .. Name'Last);
+               begin
+                  for E of Ver_Maps.Element (Cur) loop
+                     Append (R, Key & ASCII.HT & To_String (E.Vid) & ASCII.HT
+                       & Trim (E.Size'Image, Ada.Strings.Both) & ASCII.HT
+                       & String (E.Id) & ASCII.LF);
+                  end loop;
+               end;
+            end if;
+         end;
+      end loop;
+      return To_String (R);
+   end List_Object_Versions;
+
    function Scrub (V : Vault_Type) return Scrub_Report is
       R       : Scrub_Report;
       Root    : constant String := To_String (V.Self.Root);
@@ -687,6 +820,12 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       for Cur in V.Self.Uploads.Iterate loop
          for Pid of Upload_Maps.Element (Cur).Parts loop
             Live.Append (Pid);
+         end loop;
+      end loop;
+      --  Retain every stored version's object.
+      for Cur in V.Self.Versions.Iterate loop
+         for E of Ver_Maps.Element (Cur) loop
+            Live.Append (E.Id);
          end loop;
       end loop;
 

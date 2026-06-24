@@ -921,11 +921,63 @@ procedure Dezhan_Server is
                Send_Text (Ch, "200 OK", "");
             end if;
             return;
-         elsif Method = "GET" and then Index (Query, "versioning") /= 0 then
-            Send_XML (Ch, "200 OK",
-              "<?xml version=""1.0"" encoding=""UTF-8""?>"
-              & "<VersioningConfiguration xmlns="
-              & """http://s3.amazonaws.com/doc/2006-03-01/""/>");
+         elsif Index (Query, "versioning") /= 0 then
+            if Method = "PUT" then
+               Set_Versioning (V, Bucket,
+                 On => Index (To_Str (Data), "<Status>Enabled</Status>") /= 0);
+               Send_Text (Ch, "200 OK", "");
+            else
+               Send_XML (Ch, "200 OK",
+                 "<?xml version=""1.0"" encoding=""UTF-8""?>"
+                 & "<VersioningConfiguration xmlns="
+                 & """http://s3.amazonaws.com/doc/2006-03-01/"">"
+                 & (if Bucket_Versioned (V, Bucket)
+                    then "<Status>Enabled</Status>" else "")
+                 & "</VersioningConfiguration>");
+            end if;
+            return;
+         elsif Method = "GET" and then Index (Query, "versions") /= 0 then
+            --  ListObjectVersions.
+            declare
+               Lines : constant String := List_Object_Versions (V, Bucket);
+               Body_S : Unbounded_String;
+               I : Natural := Lines'First;
+            begin
+               while I <= Lines'Last loop
+                  declare
+                     E : Natural := I;
+                  begin
+                     while E <= Lines'Last and then Lines (E) /= ASCII.LF loop
+                        E := E + 1;
+                     end loop;
+                     declare
+                        Ln : constant String := Lines (I .. E - 1);
+                        T1 : constant Natural := Index (Ln, (1 => ASCII.HT));
+                        T2 : constant Natural :=
+                          (if T1 = 0 then 0 else Index (Ln (T1 + 1 .. Ln'Last), (1 => ASCII.HT)));
+                        T3 : constant Natural :=
+                          (if T2 = 0 then 0 else Index (Ln (T2 + 1 .. Ln'Last), (1 => ASCII.HT)));
+                     begin
+                        if T1 /= 0 and then T2 /= 0 and then T3 /= 0 then
+                           Append (Body_S, "<Version><Key>"
+                             & Xml_Escape (Ln (Ln'First .. T1 - 1)) & "</Key><VersionId>"
+                             & Ln (T1 + 1 .. T2 - 1) & "</VersionId><IsLatest>false</IsLatest>"
+                             & "<LastModified>" & Epoch_Date & "</LastModified><ETag>&quot;"
+                             & Ln (T3 + 1 .. Ln'Last) & "&quot;</ETag><Size>"
+                             & Ln (T2 + 1 .. T3 - 1) & "</Size>"
+                             & "<StorageClass>STANDARD</StorageClass></Version>");
+                        end if;
+                     end;
+                     I := E + 1;
+                  end;
+               end loop;
+               Send_XML (Ch, "200 OK",
+                 "<?xml version=""1.0"" encoding=""UTF-8""?>"
+                 & "<ListVersionsResult xmlns=""http://s3.amazonaws.com/doc/2006-03-01/"">"
+                 & "<Name>" & Xml_Escape (Bucket) & "</Name>"
+                 & "<IsTruncated>false</IsTruncated>"
+                 & To_String (Body_S) & "</ListVersionsResult>");
+            end;
             return;
          elsif Index (Query, "tagging") /= 0 then
             if Method = "GET" then
@@ -1096,9 +1148,26 @@ procedure Dezhan_Server is
             else
                Put_Object (V, Name, Data, Mode, Retain,
                  User_Meta => Collect_Meta (Head));
-               Send_Text (Ch, "200 OK", "",
-                 Extra => "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF);
+               declare
+                  VH : constant String :=
+                    (if Bucket_Versioned (V, Bucket)
+                     then "x-amz-version-id: " & Record_Version (V, Name) & CRLF
+                     else "");
+               begin
+                  Send_Text (Ch, "200 OK", "",
+                    Extra => "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF & VH);
+               end;
             end if;
+         end;
+
+      elsif Method = "GET" and then Q_Val (Query, "versionId=") /= "" then
+         --  GetObject for a specific version.
+         declare
+            Bytes : constant Stream_Element_Array :=
+              Get_Object_Version (V, Name, Q_Val (Query, "versionId="));
+         begin
+            Send (Ch, "200 OK", "application/octet-stream", Bytes,
+              Extra => "x-amz-version-id: " & Q_Val (Query, "versionId=") & CRLF);
          end;
 
       elsif Method = "GET" or else Method = "HEAD" then

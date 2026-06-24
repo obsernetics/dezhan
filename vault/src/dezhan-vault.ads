@@ -96,6 +96,18 @@ package Dezhan.Vault with SPARK_Mode => Off is
    --  Newline-separated bucket names.
    function  List_Buckets       (V : Vault_Type) return String;
 
+   --  Object versioning (Standard, mutable buckets).
+   procedure Set_Versioning  (V : in out Vault_Type; Bucket : String; On : Boolean);
+   function  Bucket_Versioned (V : Vault_Type; Bucket : String) return Boolean;
+   --  Record the just-stored object (Name = "bucket/key") as a new version and
+   --  return its version id. Call right after Put_Object on a versioned bucket.
+   function  Record_Version  (V : in out Vault_Type; Name : String) return String;
+   --  Bytes of a specific version (raises Not_Found if absent).
+   function  Get_Object_Version
+     (V : Vault_Type; Name, Vid : String) return Stream_Element_Array;
+   --  Version history for a bucket, one "key<HT>vid<HT>size<HT>etag" per line.
+   function  List_Object_Versions (V : Vault_Type; Bucket : String) return String;
+
    --  The object's content id (its manifest hash), usable as an S3 ETag; "" if
    --  the object is absent.
    function Object_Etag (V : Vault_Type; Name : String) return String;
