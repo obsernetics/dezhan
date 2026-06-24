@@ -6,6 +6,7 @@ with Ada.Text_IO;                       use Ada.Text_IO;
 with Ada.Directories;                   use Ada.Directories;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Vectors;
+with Ada.Containers.Ordered_Maps;
 with Interfaces;                        use Interfaces;
 with Dezhan.Trusted_Core.Hashing;       use Dezhan.Trusted_Core.Hashing;
 with Dezhan.Trusted_Core.HMAC;          use Dezhan.Trusted_Core.HMAC;
@@ -42,11 +43,15 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    package Id_Vectors is new Ada.Containers.Vectors
      (Index_Type => Natural, Element_Type => Object_Id);
 
+   --  Parts keyed by part number so completion concatenates them in order.
+   package Part_Maps is new Ada.Containers.Ordered_Maps
+     (Key_Type => Positive, Element_Type => Object_Id);
+
    type Upload is record
       Name       : Unbounded_String;
       Mode       : Lock_Mode := Compliance;
       Retain_For : Trusted_Time := 0;
-      Parts      : Id_Vectors.Vector;
+      Parts      : Part_Maps.Map;
       Total      : Natural := 0;       --  cumulative bytes across parts
    end record;
 
@@ -421,14 +426,15 @@ package body Dezhan.Vault with SPARK_Mode => Off is
            (Id, (Name       => To_Unbounded_String (Name),
                  Mode       => Mode,
                  Retain_For => Retain_For,
-                 Parts      => Id_Vectors.Empty_Vector,
+                 Parts      => Part_Maps.Empty_Map,
                  Total      => 0));
          return Id;
       end;
    end Create_Upload;
 
    procedure Upload_Part
-     (V : in out Vault_Type; Upload_Id : String; Data : Stream_Element_Array)
+     (V : in out Vault_Type; Upload_Id : String; Data : Stream_Element_Array;
+      Part_Number : Natural := 0)
    is
    begin
       Check_Ingest (V);
@@ -439,9 +445,15 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          U   : Upload := V.Self.Uploads.Element (Upload_Id);
          Pid : constant Object_Id :=
            Put (To_String (V.Self.Root), V.Self.Key, Data);
+         PN  : constant Positive :=
+           (if Part_Number > 0 then Part_Number
+            elsif U.Parts.Is_Empty then 1
+            else U.Parts.Last_Key + 1);
       begin
-         U.Parts.Append (Pid);
-         U.Total := U.Total + Natural (Data'Length);
+         if not U.Parts.Contains (PN) then
+            U.Total := U.Total + Natural (Data'Length);
+         end if;
+         U.Parts.Include (PN, Pid);
          V.Self.Uploads.Replace (Upload_Id, U);
       end;
    end Upload_Part;

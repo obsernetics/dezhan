@@ -42,6 +42,8 @@ package body Dezhan.Sigv4 with SPARK_Mode => Off is
    end Hex_SHA256;
 
    function Uri_Encode (S : String) return String is
+      --  AWS SigV4 requires UPPERCASE percent-encoding (e.g. %2F, not %2f).
+      Up    : constant String := "0123456789ABCDEF";
       Out_S : String (1 .. 3 * S'Length);
       Last  : Natural := 0;
    begin
@@ -51,13 +53,41 @@ package body Dezhan.Sigv4 with SPARK_Mode => Off is
             Out_S (Last) := C;
          else
             Out_S (Last + 1) := '%';
-            Out_S (Last + 2) := Hex_Digits (Character'Pos (C) / 16 + 1);
-            Out_S (Last + 3) := Hex_Digits (Character'Pos (C) mod 16 + 1);
+            Out_S (Last + 2) := Up (Character'Pos (C) / 16 + 1);
+            Out_S (Last + 3) := Up (Character'Pos (C) mod 16 + 1);
             Last := Last + 3;
          end if;
       end loop;
       return Out_S (1 .. Last);
    end Uri_Encode;
+
+   --  Percent-decode (%XX). The wire query is already encoded as the client
+   --  sent it; the SigV4 canonical query re-encodes the DECODED value exactly
+   --  once, so we must decode first to avoid double-encoding (e.g. %2F -> %252F).
+   function Uri_Decode (S : String) return String is
+      Out_S : String (1 .. S'Length);
+      Last  : Natural := 0;
+      I     : Natural := S'First;
+      function Nib (C : Character) return Natural is
+        (case C is
+            when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+            when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
+            when 'A' .. 'F' => Character'Pos (C) - Character'Pos ('A') + 10,
+            when others     => 0);
+   begin
+      while I <= S'Last loop
+         if S (I) = '%' and then I + 2 <= S'Last then
+            Last := Last + 1;
+            Out_S (Last) := Character'Val (Nib (S (I + 1)) * 16 + Nib (S (I + 2)));
+            I := I + 3;
+         else
+            Last := Last + 1;
+            Out_S (Last) := S (I);
+            I := I + 1;
+         end if;
+      end loop;
+      return Out_S (1 .. Last);
+   end Uri_Decode;
 
    function Canonical_Query (Raw_Query : String) return String is
       Max   : constant := 64;
@@ -78,11 +108,11 @@ package body Dezhan.Sigv4 with SPARK_Mode => Off is
          end loop;
          N := N + 1;
          if Eq = 0 then
-            Parts (N) := To_Unbounded_String (Uri_Encode (Token) & "=");
+            Parts (N) := To_Unbounded_String (Uri_Encode (Uri_Decode (Token)) & "=");
          else
             Parts (N) := To_Unbounded_String
-              (Uri_Encode (Token (Token'First .. Eq - 1)) & "="
-               & Uri_Encode (Token (Eq + 1 .. Token'Last)));
+              (Uri_Encode (Uri_Decode (Token (Token'First .. Eq - 1))) & "="
+               & Uri_Encode (Uri_Decode (Token (Eq + 1 .. Token'Last))));
          end if;
       end Add;
 

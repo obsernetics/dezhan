@@ -1,7 +1,12 @@
 with Interfaces;             use Interfaces;
 with Ada.Containers.Vectors;
+with Ada.Unchecked_Deallocation;
 
 package body Dezhan.Storage.Deflate with SPARK_Mode => Off is
+
+   type Int_Array is array (Natural range <>) of Integer;
+   type Int_Ptr   is access Int_Array;
+   procedure Free is new Ada.Unchecked_Deallocation (Int_Array, Int_Ptr);
 
    package Byte_Vec is new Ada.Containers.Vectors (Natural, Octet);
    use Byte_Vec;
@@ -315,12 +320,14 @@ package body Dezhan.Storage.Deflate with SPARK_Mode => Off is
          Put_Bits (Dist - Dist_Base (DS), Dist_Extra (DS));
       end Emit_Match;
 
-      --  LZ77 with a hash-chain over 3-byte prefixes.
+      --  LZ77 with a hash-chain over 3-byte prefixes. Prev is sized to the input
+      --  length, so it is heap-allocated: on a multi-megabyte object it would
+      --  otherwise overflow the stack.
       Hash_Size  : constant := 2 ** 15;
       Max_Chain  : constant := 128;
-      Head : array (0 .. Hash_Size - 1) of Integer := (others => -1);
-      Prev : array (0 .. Integer'Max (Data'Length, 1) - 1) of Integer :=
-        (others => -1);
+      Head   : array (0 .. Hash_Size - 1) of Integer := (others => -1);
+      Prev_P : Int_Ptr := new Int_Array'(0 .. Integer'Max (Data'Length, 1) - 1 => -1);
+      Prev   : Int_Array renames Prev_P.all;
 
       function Hash3 (P : Natural) return Natural is
         (Natural ((Shift_Left (Unsigned_32 (Data (P)), 10)
@@ -409,6 +416,7 @@ package body Dezhan.Storage.Deflate with SPARK_Mode => Off is
          for I in R'Range loop
             R (I) := Out_V.Element (I);
          end loop;
+         Free (Prev_P);
          return R;
       end;
    end Deflate;

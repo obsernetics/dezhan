@@ -50,6 +50,7 @@ with Dezhan.Kdf;                    use Dezhan.Kdf;
 with Dezhan.Keystore;              use Dezhan.Keystore;
 with Ada.Streams.Stream_IO;
 with Ada.Directories;
+with Ada.Unchecked_Deallocation;
 with Interfaces;                   use Interfaces;
 with GNAT.OS_Lib;
 
@@ -619,6 +620,57 @@ procedure Dezhan_Server is
       Send (Ch, Status, "application/xml", To_SEA (Body_Str));
    end Send_XML;
 
+   --  Response head only (for HEAD): one Content-Length set to the object size,
+   --  no body.
+   procedure Send_Head
+     (Ch : Stream_Access; Status : String; Length : Natural; Extra : String := "")
+   is
+   begin
+      String'Write (Ch,
+        "HTTP/1.1 " & Status & CRLF
+        & "Content-Type: application/octet-stream" & CRLF
+        & "Content-Length:" & Natural'Image (Length) & CRLF
+        & Extra & "Connection: close" & CRLF & CRLF);
+   end Send_Head;
+
+   function Pct_Decode (S : String) return String is
+      R : String (1 .. S'Length);
+      L : Natural := 0;
+      I : Natural := S'First;
+      function Nib (C : Character) return Natural is
+        (case C is
+            when '0' .. '9' => Character'Pos (C) - Character'Pos ('0'),
+            when 'a' .. 'f' => Character'Pos (C) - Character'Pos ('a') + 10,
+            when 'A' .. 'F' => Character'Pos (C) - Character'Pos ('A') + 10,
+            when others     => 0);
+   begin
+      while I <= S'Last loop
+         if S (I) = '%' and then I + 2 <= S'Last then
+            L := L + 1; R (L) := Character'Val (Nib (S (I + 1)) * 16 + Nib (S (I + 2)));
+            I := I + 3;
+         else
+            L := L + 1; R (L) := S (I); I := I + 1;
+         end if;
+      end loop;
+      return R (1 .. L);
+   end Pct_Decode;
+
+   function Pct_Encode (S : String) return String is
+      Up : constant String := "0123456789ABCDEF";
+      R  : String (1 .. 3 * S'Length);
+      L  : Natural := 0;
+   begin
+      for C of S loop
+         if C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~' | '/' then
+            L := L + 1; R (L) := C;
+         else
+            R (L + 1) := '%'; R (L + 2) := Up (Character'Pos (C) / 16 + 1);
+            R (L + 3) := Up (Character'Pos (C) mod 16 + 1); L := L + 3;
+         end if;
+      end loop;
+      return R (1 .. L);
+   end Pct_Encode;
+
    function To_Str (D : Stream_Element_Array) return String is
       R : String (1 .. Natural (D'Length));
    begin
@@ -644,13 +696,20 @@ procedure Dezhan_Server is
      (Ch : Stream_Access; Bucket, Query : String)
    is
       BPrefix : constant String := Bucket & "/";
-      Prefix  : constant String := Q_Val (Query, "prefix=");
-      Delim   : constant String := Q_Val (Query, "delimiter=");
-      Token   : constant String := Q_Val (Query, "continuation-token=");
+      --  Query parameter values arrive percent-encoded; decode before use.
+      Prefix  : constant String := Pct_Decode (Q_Val (Query, "prefix="));
+      Delim   : constant String := Pct_Decode (Q_Val (Query, "delimiter="));
+      Token   : constant String := Pct_Decode (Q_Val (Query, "continuation-token="));
       Max_S   : constant String := Q_Val (Query, "max-keys=");
+      Enc_Url : constant Boolean := Q_Val (Query, "encoding-type=") = "url";
       Max     : constant Natural :=
         (if Max_S = "" then 1000 else Natural'Value (Max_S));
       All_Names : constant String := Object_Names (V);
+
+      --  Honor encoding-type=url: emit keys/prefixes URL-encoded (the client
+      --  decodes them back), so special characters survive the round-trip.
+      function Enc (S : String) return String is
+        (if Enc_Url then Pct_Encode (S) else S);
       Body_S  : Unbounded_String;
       Commons : Unbounded_String;   --  CommonPrefixes accumulator
       Count   : Natural := 0;
@@ -701,7 +760,7 @@ procedure Dezhan_Server is
                                        Truncated := True;
                                     else
                                        Append (Commons, "<CommonPrefixes><Prefix>"
-                                         & Xml_Escape (CP) & "</Prefix></CommonPrefixes>");
+                                         & Xml_Escape (Enc (CP)) & "</Prefix></CommonPrefixes>");
                                        Count := Count + 1;
                                        Last_Key := To_Unbounded_String (K);
                                     end if;
@@ -712,7 +771,7 @@ procedure Dezhan_Server is
                                  Truncated := True;
                               else
                                  Append (Body_S,
-                                   "<Contents><Key>" & Xml_Escape (K)
+                                   "<Contents><Key>" & Xml_Escape (Enc (K))
                                    & "</Key><LastModified>" & Epoch_Date
                                    & "</LastModified><ETag>&quot;"
                                    & Object_Etag (V, Nm) & "&quot;</ETag><Size>"
@@ -735,13 +794,13 @@ procedure Dezhan_Server is
         "<?xml version=""1.0"" encoding=""UTF-8""?>"
         & "<ListBucketResult xmlns=""http://s3.amazonaws.com/doc/2006-03-01/"">"
         & "<Name>" & Xml_Escape (Bucket) & "</Name>"
-        & "<Prefix>" & Xml_Escape (Prefix) & "</Prefix>"
+        & "<Prefix>" & Xml_Escape (Enc (Prefix)) & "</Prefix>"
         & "<KeyCount>" & Img (Count) & "</KeyCount>"
         & "<MaxKeys>" & Img (Max) & "</MaxKeys>"
-        & (if Delim /= "" then "<Delimiter>" & Xml_Escape (Delim) & "</Delimiter>" else "")
+        & (if Delim /= "" then "<Delimiter>" & Xml_Escape (Enc (Delim)) & "</Delimiter>" else "")
         & "<IsTruncated>" & (if Truncated then "true" else "false") & "</IsTruncated>"
         & (if Truncated then "<NextContinuationToken>"
-             & Xml_Escape (To_String (Last_Key)) & "</NextContinuationToken>" else "")
+             & Xml_Escape (Enc (To_String (Last_Key))) & "</NextContinuationToken>" else "")
         & To_String (Body_S) & To_String (Commons)
         & "</ListBucketResult>");
    end List_Objects_V2;
@@ -955,9 +1014,15 @@ procedure Dezhan_Server is
          return;
       elsif Uid /= "" then
          if Method = "PUT" then
-            Upload_Part (V, Uid, Data);
-            Send_Text (Ch, "200 OK", "",
-              Extra => "ETag: " & '"' & Uid & '"' & CRLF);
+            declare
+               PN_S : constant String := Q_Val (Query, "partNumber=");
+               PN   : constant Natural :=
+                 (if PN_S = "" then 0 else Natural'Value (PN_S));
+            begin
+               Upload_Part (V, Uid, Data, Part_Number => PN);
+               Send_Text (Ch, "200 OK", "",
+                 Extra => "ETag: " & '"' & Uid & "-" & Img (PN) & '"' & CRLF);
+            end;
          elsif Method = "POST" then
             Complete_Upload (V, Uid);
             Send_XML (Ch, "200 OK",
@@ -1020,10 +1085,7 @@ procedure Dezhan_Server is
                  & "Accept-Ranges: bytes" & CRLF & Lock_Hdr;
             begin
                if Method = "HEAD" then
-                  Send (Ch, "200 OK", "application/octet-stream",
-                    (1 .. 0 => 0),
-                    Extra => "Content-Length:" & Natural'Image (Object_Size (V, Name))
-                             & CRLF & ETag_H);
+                  Send_Head (Ch, "200 OK", Object_Size (V, Name), ETag_H);
                else
                   declare
                      Full  : constant Stream_Element_Array := Get_Object (V, Name);
@@ -1088,10 +1150,18 @@ procedure Dezhan_Server is
       PQuery : constant String :=
         (if QMark = 0 then "" else Path (QMark + 1 .. Path'Last));
    begin
-      --  Drain the request body (if any).
+      --  Drain the request body (if any). Heap-allocated: a multi-megabyte body
+      --  (e.g. a multipart part) would overflow the stack.
       declare
-         Body_Bytes : Stream_Element_Array (1 .. Stream_Element_Offset (Len));
+         type SEA_Ptr is access Stream_Element_Array;
+         procedure Free is new Ada.Unchecked_Deallocation
+           (Stream_Element_Array, SEA_Ptr);
+         Body_Ptr : SEA_Ptr :=
+           new Stream_Element_Array (1 .. Stream_Element_Offset (Len));
       begin
+       declare
+         Body_Bytes : Stream_Element_Array renames Body_Ptr.all;
+       begin
          if Len > 0 then
             Stream_Element_Array'Read (Ch, Body_Bytes);
          end if;
@@ -1398,6 +1468,10 @@ procedure Dezhan_Server is
             Send_Text (Ch, "409 Conflict", "bucket not empty");
          when Bucket_Exists_Error =>
             Send_Text (Ch, "409 Conflict", "bucket already exists");
+       end;
+       Free (Body_Ptr);
+      exception
+         when others => Free (Body_Ptr); raise;
       end;
    end Handle;
 

@@ -12,4 +12,10 @@ project Dezhan_Server is
       for Default_Switches ("Ada") use ("-gnat2022", "-gnatwa", "-gnatwJ", "-g");
    end Compiler;
 
+   package Binder is
+      --  Generous secondary stack: (de)compressing a multi-megabyte object
+      --  returns whole-object arrays by value on the secondary stack.
+      for Default_Switches ("Ada") use ("-D64m");
+   end Binder;
+
 end Dezhan_Server;

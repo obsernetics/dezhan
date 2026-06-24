@@ -56,8 +56,11 @@ package Dezhan.Vault with SPARK_Mode => Off is
       Mode       : Lock_Mode;
       Retain_For : Trusted_Time) return String;
 
+   --  Part_Number orders parts in the completed object (S3 clients upload parts
+   --  concurrently and out of order). 0 means append after the highest so far.
    procedure Upload_Part
-     (V : in out Vault_Type; Upload_Id : String; Data : Stream_Element_Array);
+     (V : in out Vault_Type; Upload_Id : String; Data : Stream_Element_Array;
+      Part_Number : Natural := 0);
 
    procedure Complete_Upload (V : in out Vault_Type; Upload_Id : String);
    procedure Abort_Upload    (V : in out Vault_Type; Upload_Id : String);
