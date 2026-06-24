@@ -123,14 +123,14 @@ Platform layer (regular Ada, not SPARK-verified to the trusted-core degree):
   An S3-compatible API is implemented and validated against the AWS SDK (boto3):
   path-style buckets and objects, ListBuckets/ListObjectsV2 (prefix/delimiter/
   continuation), CopyObject, batch delete, S3-XML multipart (partNumber-ordered),
-  object versioning (ListObjectVersions, GET by versionId), Content-Type and
-  x-amz-meta-* user metadata, conditional requests (If-None-Match/If-Match),
-  object-lock buckets enforcing WORM, S3 `<Error>` bodies, and SigV4 in both
-  header and presigned-URL form enforced on all data paths. The legacy flat `/v`
-  API remains. Still to do on the S3 layer: delete markers for versioned
-  buckets, the MinIO admin/IAM surface, lifecycle, and CORS. Large incompressible
-  single objects are still bounded by the ~1 MB manifest cap (use multipart). The
-  server stays single-threaded.
+  object versioning with delete markers (ListObjectVersions, GET/DELETE by
+  versionId), Content-Type and x-amz-meta-* user metadata, conditional requests
+  (If-None-Match/If-Match), object-lock buckets enforcing WORM, S3 `<Error>`
+  bodies, and SigV4 in both header and presigned-URL form enforced on all data
+  paths. Large single objects over the one-manifest limit are transparently
+  stored as composites, so a plain large PUT works without multipart. The legacy
+  flat `/v` API remains. Still to do on the S3 layer: the MinIO admin/IAM
+  surface, lifecycle, and CORS. The server stays single-threaded.
   SigV4 authentication is implemented
 and enforced: the signing core (`Dezhan.Sigv4`, on the RFC 4231-validated
 `Dezhan.Trusted_Core.HMAC`) is validated byte-for-byte against the AWS worked
