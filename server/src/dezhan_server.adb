@@ -598,6 +598,377 @@ procedure Dezhan_Server is
       end;
    end Check_Auth;
 
+   ------------------------------------------------------------ S3 layer
+
+   function Xml_Escape (S : String) return String is
+      R : Unbounded_String;
+   begin
+      for I in S'Range loop
+         case S (I) is
+            when '&' => Append (R, "&amp;");
+            when '<' => Append (R, "&lt;");
+            when '>' => Append (R, "&gt;");
+            when others => Append (R, S (I));
+         end case;
+      end loop;
+      return To_String (R);
+   end Xml_Escape;
+
+   procedure Send_XML (Ch : Stream_Access; Status, Body_Str : String) is
+   begin
+      Send (Ch, Status, "application/xml", To_SEA (Body_Str));
+   end Send_XML;
+
+   procedure S3_Error (Ch : Stream_Access; Status, Code, Resource : String) is
+   begin
+      Send_XML (Ch, Status,
+        "<?xml version=""1.0"" encoding=""UTF-8""?>"
+        & "<Error><Code>" & Code & "</Code><Message>" & Code
+        & "</Message><Resource>" & Xml_Escape (Resource) & "</Resource></Error>");
+   end S3_Error;
+
+   Epoch_Date : constant String := "1970-01-01T00:00:00.000Z";
+
+   --  S3 ListObjectsV2 over the keys of one bucket (prefix/delimiter/max-keys/
+   --  continuation-token), in <ListBucketResult> form.
+   procedure List_Objects_V2
+     (Ch : Stream_Access; Bucket, Query : String)
+   is
+      BPrefix : constant String := Bucket & "/";
+      Prefix  : constant String := Q_Val (Query, "prefix=");
+      Delim   : constant String := Q_Val (Query, "delimiter=");
+      Token   : constant String := Q_Val (Query, "continuation-token=");
+      Max_S   : constant String := Q_Val (Query, "max-keys=");
+      Max     : constant Natural :=
+        (if Max_S = "" then 1000 else Natural'Value (Max_S));
+      All_Names : constant String := Object_Names (V);
+      Body_S  : Unbounded_String;
+      Commons : Unbounded_String;   --  CommonPrefixes accumulator
+      Count   : Natural := 0;
+      Truncated : Boolean := False;
+      Last_Key  : Unbounded_String;
+
+      function Seen_Common (P : String) return Boolean is
+        (Index (To_String (Commons), "<Prefix>" & Xml_Escape (P) & "</Prefix>") /= 0);
+
+      I : Natural := All_Names'First;
+   begin
+      while I <= All_Names'Last loop
+         --  Next line (object internal name) in All_Names.
+         declare
+            E : Natural := I;
+         begin
+            while E <= All_Names'Last and then All_Names (E) /= ASCII.LF loop
+               E := E + 1;
+            end loop;
+            declare
+               Nm : constant String := All_Names (I .. E - 1);
+            begin
+               if Nm'Length > BPrefix'Length
+                 and then Nm (Nm'First .. Nm'First + BPrefix'Length - 1) = BPrefix
+               then
+                  declare
+                     K : constant String := Nm (Nm'First + BPrefix'Length .. Nm'Last);
+                  begin
+                     if (Prefix = ""
+                         or else (K'Length >= Prefix'Length
+                                  and then K (K'First .. K'First + Prefix'Length - 1) = Prefix))
+                       and then (Token = "" or else K > Token)
+                     then
+                        --  Delimiter rollup into CommonPrefixes.
+                        declare
+                           DPos : Natural := 0;
+                        begin
+                           if Delim /= "" then
+                              DPos := Index (K (K'First + Prefix'Length .. K'Last), Delim);
+                           end if;
+                           if DPos /= 0 then
+                              declare
+                                 CP : constant String :=
+                                   K (K'First .. DPos - 1 + Delim'Length);
+                              begin
+                                 if not Seen_Common (CP) then
+                                    if Count >= Max then
+                                       Truncated := True;
+                                    else
+                                       Append (Commons, "<CommonPrefixes><Prefix>"
+                                         & Xml_Escape (CP) & "</Prefix></CommonPrefixes>");
+                                       Count := Count + 1;
+                                       Last_Key := To_Unbounded_String (K);
+                                    end if;
+                                 end if;
+                              end;
+                           else
+                              if Count >= Max then
+                                 Truncated := True;
+                              else
+                                 Append (Body_S,
+                                   "<Contents><Key>" & Xml_Escape (K)
+                                   & "</Key><LastModified>" & Epoch_Date
+                                   & "</LastModified><ETag>&quot;"
+                                   & Object_Etag (V, Nm) & "&quot;</ETag><Size>"
+                                   & Img (Object_Size (V, Nm))
+                                   & "</Size><StorageClass>STANDARD</StorageClass></Contents>");
+                                 Count := Count + 1;
+                                 Last_Key := To_Unbounded_String (K);
+                              end if;
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+            I := E + 1;
+         end;
+      end loop;
+
+      Send_XML (Ch, "200 OK",
+        "<?xml version=""1.0"" encoding=""UTF-8""?>"
+        & "<ListBucketResult xmlns=""http://s3.amazonaws.com/doc/2006-03-01/"">"
+        & "<Name>" & Xml_Escape (Bucket) & "</Name>"
+        & "<Prefix>" & Xml_Escape (Prefix) & "</Prefix>"
+        & "<KeyCount>" & Img (Count) & "</KeyCount>"
+        & "<MaxKeys>" & Img (Max) & "</MaxKeys>"
+        & (if Delim /= "" then "<Delimiter>" & Xml_Escape (Delim) & "</Delimiter>" else "")
+        & "<IsTruncated>" & (if Truncated then "true" else "false") & "</IsTruncated>"
+        & (if Truncated then "<NextContinuationToken>"
+             & Xml_Escape (To_String (Last_Key)) & "</NextContinuationToken>" else "")
+        & To_String (Body_S) & To_String (Commons)
+        & "</ListBucketResult>");
+   end List_Objects_V2;
+
+   procedure List_All_Buckets (Ch : Stream_Access) is
+      Names : constant String := List_Buckets (V);
+      Body_S : Unbounded_String;
+      I : Natural := Names'First;
+   begin
+      while I <= Names'Last loop
+         declare
+            E : Natural := I;
+         begin
+            while E <= Names'Last and then Names (E) /= ASCII.LF loop
+               E := E + 1;
+            end loop;
+            if E > I then
+               Append (Body_S, "<Bucket><Name>" & Xml_Escape (Names (I .. E - 1))
+                 & "</Name><CreationDate>" & Epoch_Date & "</CreationDate></Bucket>");
+            end if;
+            I := E + 1;
+         end;
+      end loop;
+      Send_XML (Ch, "200 OK",
+        "<?xml version=""1.0"" encoding=""UTF-8""?>"
+        & "<ListAllMyBucketsResult xmlns=""http://s3.amazonaws.com/doc/2006-03-01/"">"
+        & "<Owner><ID>dezhan</ID><DisplayName>dezhan</DisplayName></Owner>"
+        & "<Buckets>" & To_String (Body_S) & "</Buckets></ListAllMyBucketsResult>");
+   end List_All_Buckets;
+
+   --  Path-style S3 dispatch for non-reserved routes: /{bucket}[/{key}].
+   procedure Handle_S3
+     (Ch     : Stream_Access;
+      Method : String;
+      Path0  : String;
+      Query  : String;
+      Head   : String;
+      Data   : Stream_Element_Array)
+   is
+      Rest   : constant String :=
+        (if Path0'Length >= 1 then Path0 (Path0'First + 1 .. Path0'Last) else "");
+      Slash  : constant Natural := Index (Rest, "/");
+      Bucket : constant String :=
+        (if Slash = 0 then Rest else Rest (Rest'First .. Slash - 1));
+      Key    : constant String :=
+        (if Slash = 0 then "" else Rest (Slash + 1 .. Rest'Last));
+      Name   : constant String := Bucket & "/" & Key;   --  internal object name
+      Locked : constant Boolean := Bucket_Object_Lock (V, Bucket);
+      Mode   : constant Lock_Mode :=
+        (if not Locked then Governance
+         elsif Header (Head, "x-amz-object-lock-mode") = "GOVERNANCE"
+         then Governance else Compliance);
+      Retain : constant Trusted_Time :=
+        (if not Locked then 0
+         elsif Header (Head, "X-Dezhan-Retain") /= ""
+         then Trusted_Time'Value (Header (Head, "X-Dezhan-Retain"))
+         else 3600);
+      Uid    : constant String := Q_Val (Query, "uploadId=");
+   begin
+      if Bucket = "" then
+         if Method = "GET" then
+            List_All_Buckets (Ch);
+         else
+            S3_Error (Ch, "405 Method Not Allowed", "MethodNotAllowed", Path0);
+         end if;
+         return;
+      end if;
+
+      --  Bucket-level operations (no key).
+      if Key = "" then
+         if Method = "PUT" then
+            if Bucket_Exists (V, Bucket) then
+               S3_Error (Ch, "409 Conflict", "BucketAlreadyOwnedByYou", Path0);
+            else
+               Create_Bucket (V, Bucket,
+                 Object_Lock =>
+                   Header (Head, "x-amz-bucket-object-lock-enabled") = "true");
+               Send_Text (Ch, "200 OK", "");
+            end if;
+         elsif Method = "HEAD" then
+            if Bucket_Exists (V, Bucket) then
+               Send_Text (Ch, "200 OK", "");
+            else
+               Send_Text (Ch, "404 Not Found", "");
+            end if;
+         elsif Method = "DELETE" then
+            Delete_Bucket (V, Bucket);
+            Send_Text (Ch, "204 No Content", "");
+         elsif Method = "GET" then
+            if not Bucket_Exists (V, Bucket) then
+               S3_Error (Ch, "404 Not Found", "NoSuchBucket", Path0);
+            else
+               List_Objects_V2 (Ch, Bucket, Query);
+            end if;
+         else
+            S3_Error (Ch, "405 Method Not Allowed", "MethodNotAllowed", Path0);
+         end if;
+         return;
+      end if;
+
+      --  Object-level operations.
+      if not Bucket_Exists (V, Bucket) then
+         S3_Error (Ch, "404 Not Found", "NoSuchBucket", Path0);
+         return;
+      end if;
+
+      --  Multipart upload sub-resources.
+      if Query = "uploads" and then Method = "POST" then
+         declare
+            Up : constant String :=
+              Create_Upload (V, Name, (if Locked then Mode else Compliance), Retain);
+         begin
+            Send_XML (Ch, "200 OK",
+              "<?xml version=""1.0"" encoding=""UTF-8""?>"
+              & "<InitiateMultipartUploadResult><Bucket>" & Xml_Escape (Bucket)
+              & "</Bucket><Key>" & Xml_Escape (Key) & "</Key><UploadId>" & Up
+              & "</UploadId></InitiateMultipartUploadResult>");
+         end;
+         return;
+      elsif Uid /= "" then
+         if Method = "PUT" then
+            Upload_Part (V, Uid, Data);
+            Send_Text (Ch, "200 OK", "",
+              Extra => "ETag: " & '"' & Uid & '"' & CRLF);
+         elsif Method = "POST" then
+            Complete_Upload (V, Uid);
+            Send_XML (Ch, "200 OK",
+              "<?xml version=""1.0"" encoding=""UTF-8""?>"
+              & "<CompleteMultipartUploadResult><Location>/" & Xml_Escape (Bucket)
+              & "/" & Xml_Escape (Key) & "</Location><Bucket>" & Xml_Escape (Bucket)
+              & "</Bucket><Key>" & Xml_Escape (Key) & "</Key><ETag>&quot;"
+              & Object_Etag (V, Name) & "&quot;</ETag></CompleteMultipartUploadResult>");
+         elsif Method = "DELETE" then
+            Abort_Upload (V, Uid);
+            Send_Text (Ch, "204 No Content", "");
+         else
+            S3_Error (Ch, "405 Method Not Allowed", "MethodNotAllowed", Path0);
+         end if;
+         return;
+      end if;
+
+      if Method = "PUT" then
+         --  CopyObject if x-amz-copy-source is present.
+         declare
+            Src : constant String := Header (Head, "x-amz-copy-source");
+         begin
+            if Locked and then Bucket_Exists (V, Bucket)
+              and then Contains (V, Name) and then not Object_Deletable (V, Name)
+            then
+               S3_Error (Ch, "403 Forbidden", "AccessDenied", Path0);
+            elsif Src /= "" then
+               declare
+                  S0  : constant String :=
+                    (if Src (Src'First) = '/' then Src (Src'First + 1 .. Src'Last) else Src);
+                  Bytes : constant Stream_Element_Array := Get_Object (V, S0);
+               begin
+                  Put_Object (V, Name, Bytes, Mode, Retain);
+                  Send_XML (Ch, "200 OK",
+                    "<?xml version=""1.0"" encoding=""UTF-8""?>"
+                    & "<CopyObjectResult><LastModified>" & Epoch_Date
+                    & "</LastModified><ETag>&quot;" & Object_Etag (V, Name)
+                    & "&quot;</ETag></CopyObjectResult>");
+               end;
+            else
+               Put_Object (V, Name, Data, Mode, Retain);
+               Send_Text (Ch, "200 OK", "",
+                 Extra => "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF);
+            end if;
+         end;
+
+      elsif Method = "GET" or else Method = "HEAD" then
+         if not Contains (V, Name) then
+            if Method = "HEAD" then
+               Send_Text (Ch, "404 Not Found", "");
+            else
+               S3_Error (Ch, "404 Not Found", "NoSuchKey", Path0);
+            end if;
+         else
+            declare
+               Lock_Hdr : constant String :=
+                 (if Locked then "x-amz-object-lock-mode: COMPLIANCE" & CRLF else "");
+               ETag_H : constant String :=
+                 "ETag: " & '"' & Object_Etag (V, Name) & '"' & CRLF
+                 & "Accept-Ranges: bytes" & CRLF & Lock_Hdr;
+            begin
+               if Method = "HEAD" then
+                  Send (Ch, "200 OK", "application/octet-stream",
+                    (1 .. 0 => 0),
+                    Extra => "Content-Length:" & Natural'Image (Object_Size (V, Name))
+                             & CRLF & ETag_H);
+               else
+                  declare
+                     Full  : constant Stream_Element_Array := Get_Object (V, Name);
+                     Rng   : constant String := Header (Head, "Range");
+                     Total : constant Natural := Natural (Full'Length);
+                     First, Last : Natural;
+                     Ok    : Boolean;
+                  begin
+                     if Rng = "" then
+                        Send (Ch, "200 OK", "application/octet-stream", Full,
+                              Extra => ETag_H);
+                     else
+                        Parse_Range (Rng, Total, First, Last, Ok);
+                        if not Ok then
+                           Send_Text (Ch, "416 Range Not Satisfiable", "",
+                             Extra => "Content-Range: bytes */" & Img (Total) & CRLF);
+                        else
+                           Send (Ch, "206 Partial Content", "application/octet-stream",
+                             Full (Full'First + Stream_Element_Offset (First)
+                                   .. Full'First + Stream_Element_Offset (Last)),
+                             Extra => ETag_H & "Content-Range: bytes " & Img (First)
+                                      & "-" & Img (Last) & "/" & Img (Total) & CRLF);
+                        end if;
+                     end if;
+                  end;
+               end if;
+            end;
+         end if;
+
+      elsif Method = "DELETE" then
+         if not Contains (V, Name) then
+            Send_Text (Ch, "204 No Content", "");   --  S3 delete is idempotent
+         elsif Delete_Object (V, Name,
+                 Bypass => Header (Head, "X-Dezhan-Bypass") = "true")
+         then
+            Send_Text (Ch, "204 No Content", "");
+         else
+            Denied_Deletes := Denied_Deletes + 1;
+            S3_Error (Ch, "403 Forbidden", "AccessDenied", Path0);
+         end if;
+
+      else
+         S3_Error (Ch, "405 Method Not Allowed", "MethodNotAllowed", Path0);
+      end if;
+   end Handle_S3;
+
    procedure Handle (Ch : Stream_Access) is
       Head : constant String := Read_Head (Ch);
       SP1  : constant Natural := Index (Head, " ");
@@ -653,7 +1024,14 @@ procedure Dezhan_Server is
          end if;
 
          if Method = "GET" and then Path = "/" then
-            Send (Ch, "200 OK", "text/html", To_SEA (Index_Html));
+            --  S3 clients (signed/x-amz) get ListBuckets; browsers get the UI.
+            if Header (Head, "Authorization") /= ""
+              or else Header (Head, "x-amz-date") /= ""
+            then
+               Handle_S3 (Ch, Method, "/", "", Head, Body_Bytes);
+            else
+               Send (Ch, "200 OK", "text/html", To_SEA (Index_Html));
+            end if;
 
          elsif Method = "GET" and then Path = "/healthz" then
             Send_Text (Ch, "200 OK", (if Sealed (V) then "sealed" else "ok"));
@@ -888,7 +1266,8 @@ procedure Dezhan_Server is
             end;
 
          else
-            Send_Text (Ch, "404 Not Found", "unknown route");
+            --  Any non-reserved path is an S3 bucket/key request.
+            Handle_S3 (Ch, Method, Path0, PQuery, Head, Body_Bytes);
          end if;
       exception
          when Vault_Sealed =>
@@ -908,6 +1287,10 @@ procedure Dezhan_Server is
          when Auth_Failed =>
             Send_Text (Ch, "403 Forbidden",
                        "authentication failed (wrong key or tampering)");
+         when Bucket_Not_Empty =>
+            Send_Text (Ch, "409 Conflict", "bucket not empty");
+         when Bucket_Exists_Error =>
+            Send_Text (Ch, "409 Conflict", "bucket already exists");
       end;
    end Handle;
 

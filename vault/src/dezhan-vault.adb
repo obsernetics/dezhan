@@ -29,6 +29,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Lock        : Retention_Lock;
       Composite   : Boolean := False;  --  Id points to a list of part ids
       Quarantined : Boolean := False;  --  scrub found it unrepairable (lost > M)
+      Size        : Natural := 0;      --  object plaintext length (for listings)
    end record;
 
    package Meta_Maps is new Ada.Containers.Indefinite_Hashed_Maps
@@ -46,10 +47,16 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Mode       : Lock_Mode := Compliance;
       Retain_For : Trusted_Time := 0;
       Parts      : Id_Vectors.Vector;
+      Total      : Natural := 0;       --  cumulative bytes across parts
    end record;
 
    package Upload_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => Upload,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
+   --  S3 buckets: name -> object-lock-enabled (immutable) flag.
+   package Bucket_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Boolean,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
    type State is record
@@ -65,6 +72,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Log        : Log_Vectors.Vector;
       Uploads    : Upload_Maps.Map;  --  in-flight multipart uploads (transient)
       Upload_Seq : Natural := 0;
+      Buckets    : Bucket_Maps.Map;
    end record;
 
    --  Writes are refused only by an operator seal (air-gap read-only). A clock
@@ -199,6 +207,10 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Put_Line (F, "BOOT " & To_String (V.Self.Last_Boot));
       Put_Line (F, "MODES " & (if V.Self.Ingest_Only then "1" else "0")
                    & " " & (if V.Self.Sync_Shut then "1" else "0"));
+      for Cur in V.Self.Buckets.Iterate loop
+         Put_Line (F, "BKT " & Str_To_Hex (Bucket_Maps.Key (Cur))
+                      & (if Bucket_Maps.Element (Cur) then " 1" else " 0"));
+      end loop;
       for Cur in V.Self.Index.Iterate loop
          declare
             Name : constant String := Meta_Maps.Key (Cur);
@@ -210,7 +222,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                          & M.Lock.Created_At'Image
                          & (if M.Composite then " 1" else " 0")
                          & (if M.Lock.Legal_Hold then " 1" else " 0")
-                         & (if M.Quarantined then " 1" else " 0"));
+                         & (if M.Quarantined then " 1" else " 0")
+                         & Natural'Image (M.Size));
          end;
       end loop;
       Put_Line (F, "AUDIT" & Natural'Image (Natural (V.Self.Log.Length)));
@@ -256,6 +269,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
             elsif Tag = "MODES" then
                V.Self.Ingest_Only := Field (Line, 2) = "1";
                V.Self.Sync_Shut   := Field (Line, 3) = "1";
+            elsif Tag = "BKT" then
+               V.Self.Buckets.Include
+                 (Hex_To_Str (Field (Line, 2)), Field (Line, 3) = "1");
             elsif Tag = "OBJ" then
                V.Self.Index.Include
                  (Hex_To_Str (Field (Line, 2)),
@@ -267,7 +283,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                       Created_At   => Trusted_Time'Value (Field (Line, 6)),
                       Legal_Hold   => Field (Line, 8) = "1"),
                    Composite   => Field (Line, 7) = "1",
-                   Quarantined => Field (Line, 9) = "1"));
+                   Quarantined => Field (Line, 9) = "1",
+                   Size        => (if Field (Line, 10) = "" then 0
+                                   else Natural'Value (Field (Line, 10)))));
             elsif Tag = "A" then
                V.Self.Log.Append
                  (Audit_Entry'
@@ -321,7 +339,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       begin
          V.Self.Index.Include
            (Name, (Id => Id, Lock => Lock, Composite => False,
-                   Quarantined => False));
+                   Quarantined => False, Size => Natural (Data'Length)));
          Add_Audit (V, Lock_Created, Name_Digest (Name), At_Time + Retain_For);
          Save (V);
       end;
@@ -403,7 +421,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
            (Id, (Name       => To_Unbounded_String (Name),
                  Mode       => Mode,
                  Retain_For => Retain_For,
-                 Parts      => Id_Vectors.Empty_Vector));
+                 Parts      => Id_Vectors.Empty_Vector,
+                 Total      => 0));
          return Id;
       end;
    end Create_Upload;
@@ -422,6 +441,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
            Put (To_String (V.Self.Root), V.Self.Key, Data);
       begin
          U.Parts.Append (Pid);
+         U.Total := U.Total + Natural (Data'Length);
          V.Self.Uploads.Replace (Upload_Id, U);
       end;
    end Upload_Part;
@@ -454,7 +474,7 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          begin
             V.Self.Index.Include
               (Name, (Id => List_Id, Lock => Lock, Composite => True,
-                      Quarantined => False));
+                      Quarantined => False, Size => U.Total));
             Add_Audit (V, Lock_Created, Name_Digest (Name),
                        At_Time + U.Retain_For);
          end;
@@ -489,6 +509,65 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       end loop;
       return To_String (R);
    end Object_Names;
+
+   function Object_Size (V : Vault_Type; Name : String) return Natural is
+     (if V.Self.Index.Contains (Name)
+      then V.Self.Index.Element (Name).Size else 0);
+
+   function Object_Deletable (V : Vault_Type; Name : String) return Boolean is
+     (V.Self.Index.Contains (Name)
+      and then Can_Delete (V.Self.Index.Element (Name).Lock,
+                           CG.Now (V.Self.Clock),
+                           (Bypass_Governance => False)));
+
+   procedure Create_Bucket
+     (V : in out Vault_Type; Name : String; Object_Lock : Boolean := False) is
+   begin
+      Check_Ingest (V);
+      if V.Self.Buckets.Contains (Name) then
+         raise Bucket_Exists_Error;
+      end if;
+      V.Self.Buckets.Include (Name, Object_Lock);
+      Save (V);
+   end Create_Bucket;
+
+   function Bucket_Exists (V : Vault_Type; Name : String) return Boolean is
+     (V.Self.Buckets.Contains (Name));
+
+   function Bucket_Object_Lock (V : Vault_Type; Name : String) return Boolean is
+     (V.Self.Buckets.Contains (Name) and then V.Self.Buckets.Element (Name));
+
+   procedure Delete_Bucket (V : in out Vault_Type; Name : String) is
+      Prefix : constant String := Name & "/";
+   begin
+      Check_Ingest (V);
+      if not V.Self.Buckets.Contains (Name) then
+         raise Not_Found;
+      end if;
+      for Cur in V.Self.Index.Iterate loop
+         declare
+            K : constant String := Meta_Maps.Key (Cur);
+         begin
+            if K'Length >= Prefix'Length
+              and then K (K'First .. K'First + Prefix'Length - 1) = Prefix
+            then
+               raise Bucket_Not_Empty;
+            end if;
+         end;
+      end loop;
+      V.Self.Buckets.Delete (Name);
+      Save (V);
+   end Delete_Bucket;
+
+   function List_Buckets (V : Vault_Type) return String is
+      R : Unbounded_String;
+   begin
+      for Cur in V.Self.Buckets.Iterate loop
+         Append (R, Bucket_Maps.Key (Cur));
+         Append (R, ASCII.LF);
+      end loop;
+      return To_String (R);
+   end List_Buckets;
 
    function Scrub (V : Vault_Type) return Scrub_Report is
       R       : Scrub_Report;

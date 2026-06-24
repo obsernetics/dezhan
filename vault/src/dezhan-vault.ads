@@ -69,6 +69,25 @@ package Dezhan.Vault with SPARK_Mode => Off is
    --  unrepairable). A read of a quarantined object raises Object_Quarantined.
    function Quarantined_Count (V : Vault_Type) return Natural;
 
+   --  Plaintext length of a stored object (0 if absent), for S3 listings.
+   function Object_Size (V : Vault_Type; Name : String) return Natural;
+
+   --  True if Name exists and its lock currently permits deletion (expired and
+   --  no legal hold). Gates S3 overwrites so a locked object is never replaced.
+   function Object_Deletable (V : Vault_Type; Name : String) return Boolean;
+
+   --  S3 buckets. Names map onto the flat object namespace as "<bucket>/<key>".
+   --  An object-lock-enabled bucket is immutable (retention enforced).
+   Bucket_Exists_Error : exception;  --  create over an existing bucket
+   Bucket_Not_Empty    : exception;  --  delete a bucket that still has objects
+   procedure Create_Bucket
+     (V : in out Vault_Type; Name : String; Object_Lock : Boolean := False);
+   function  Bucket_Exists      (V : Vault_Type; Name : String) return Boolean;
+   function  Bucket_Object_Lock (V : Vault_Type; Name : String) return Boolean;
+   procedure Delete_Bucket      (V : in out Vault_Type; Name : String);
+   --  Newline-separated bucket names.
+   function  List_Buckets       (V : Vault_Type) return String;
+
    --  The object's content id (its manifest hash), usable as an S3 ETag; "" if
    --  the object is absent.
    function Object_Etag (V : Vault_Type; Name : String) return String;

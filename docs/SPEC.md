@@ -422,6 +422,33 @@ governed by the retention state machine. This does not change the priority of
 integrity over throughput: dezhan is not intended to match general-purpose stores
 on raw throughput.
 
+### S3 Compatibility Layer (in scope; promoted from post-MVP)
+
+To be usable as a drop-in target for existing S3 clients and backup products
+(aws-cli, s3cmd, restic, Veeam, Velero), dezhan implements an S3 REST surface in
+the standard wire format. Scope (the subset real clients exercise), not the whole
+of AWS S3 or MinIO's admin/IAM surface:
+
+* Path-style addressing: `/{bucket}` and `/{bucket}/{key}`.
+* Buckets: create (`PUT`), head, delete, and list-buckets (`GET /`), with an
+  object-lock-enabled (immutable) flag set at creation.
+* Objects: `PUT`/`GET`/`HEAD`/`DELETE`, byte-range reads, and `CopyObject`
+  (`x-amz-copy-source`).
+* Listing: ListObjectsV2 (`?list-type=2`) with prefix, delimiter, max-keys, and
+  continuation, returning `<ListBucketResult>` XML.
+* Multipart: create/upload-part/complete/abort/list-parts in S3 XML form.
+* Batch delete (`POST ?delete`).
+* S3 Object Lock headers (`x-amz-object-lock-mode`,
+  `x-amz-object-lock-retain-until-date`) mapped onto the retention state machine.
+* Object and bucket tagging.
+* AWS SigV4 over the above (header and presigned/query forms).
+* S3 error responses as `<Error><Code>...</Code></Error>` with correct status.
+
+Explicitly out of scope: MinIO's admin API, IAM/policy engine, lifecycle
+transitions, replication, and CORS beyond a permissive default. Provable
+immutability remains the headline; S3 compatibility serves ingestion, it does not
+dilute the integrity guarantees.
+
 ---
 
 ## Non-Functional Requirements
