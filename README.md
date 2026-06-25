@@ -31,10 +31,13 @@ Kubernetes operator (then create a `DezhanVault`, below):
 kubectl apply -f https://raw.githubusercontent.com/obsernetics/dezhan/main/deploy/dezhan.yaml
 ```
 
-Or with Helm (set `vault.create=true` to provision a vault too):
+Or with Helm from the chart repo (set `vault.create=true` to provision a vault
+too):
 
 ```sh
-helm install dezhan ./deploy/charts/dezhan
+helm repo add dezhan https://obsernetics.github.io/dezhan
+helm repo update
+helm install dezhan dezhan/dezhan
 ```
 
 ## Use it
