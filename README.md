@@ -66,6 +66,21 @@ CronJobs orchestrate an air-gap sync window
 ([deploy/airgap-sync.yaml](deploy/airgap-sync.yaml)) and back up etcd into a
 vault ([deploy/etcd-backup.yaml](deploy/etcd-backup.yaml)).
 
+### CLI
+
+A built-in client ships in the image and the binaries (`DEZHAN_ADDR=host:port`,
+default `127.0.0.1:8080`):
+
+```sh
+dezhan_cli health                                  # ok / sealed
+dezhan_cli put report "data" compliance 86400      # store under 1-day retention
+dezhan_cli get report
+dezhan_cli del report                              # denied until retention expires
+```
+
+More examples (aws-cli, restic, boto3, Velero, the operator CR) are in
+[examples/](examples/).
+
 ## Configuration
 
 | Variable | Meaning | Default |

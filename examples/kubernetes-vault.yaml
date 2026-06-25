@@ -1,0 +1,23 @@
+# A production-shaped vault for the operator: signed requests, four-eyes
+# deletes, secrets from a Secret. Apply after installing the operator
+# (kubectl apply -f https://raw.githubusercontent.com/obsernetics/dezhan/main/deploy/dezhan.yaml).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-vault-secrets
+type: Opaque
+stringData:
+  DEZHAN_VAULT_KEY: "change-me-to-a-long-random-passphrase"
+  DEZHAN_SECRET: "change-me-too-0123456789abcdef"
+  DEZHAN_APPROVERS: "alice-secret,bob-secret"
+---
+apiVersion: dezhan.obsernetics.io/v1alpha1
+kind: DezhanVault
+metadata:
+  name: my-vault
+spec:
+  storage: 100Gi
+  requireAuth: true
+  deleteQuorum: 2          # deletes need 2 approver co-signatures
+  scrubIntervalSeconds: 600
+  secretName: my-vault-secrets
