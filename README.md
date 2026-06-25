@@ -207,6 +207,18 @@ bucket, and a PVC with that snapshot as its `dataSource` restores it.
 scraping. Apply the ServiceMonitor, Grafana dashboard, alerts, and an OTel
 Collector bridge with `kubectl apply -f operator/config/observability/`.
 
+## Benchmarks
+
+S3 throughput across a 3-node k3s cluster and an on-prem VM, with MinIO as a
+reference (Longhorn = dezhan on a Longhorn PV):
+
+![dezhan vs MinIO/Longhorn](bench/dezhan-vs-others.svg)
+
+dezhan trades write throughput for durability and integrity (every write is
+fsync'd, erasure-coded, and encrypted), so it is much slower on PUT than MinIO
+but stays within a small factor on GET. Harness, raw results, and tables are in
+[bench/](bench/) (`bench/results/COMPARISON.md`).
+
 ## How it works
 
 The retention state machine, clock-integrity guard, append-only audit chain, and
