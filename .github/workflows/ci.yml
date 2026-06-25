@@ -36,3 +36,8 @@ jobs:
 
       - name: Build and unit tests
         run: sh scripts/test.sh
+
+      - name: Trusted-core coverage gate
+        env:
+          COVERAGE_MIN: "90"
+        run: sh scripts/coverage.sh

@@ -2,6 +2,7 @@
 
 [![ci](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml/badge.svg)](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml)
 [![SPARK proof: 325 checks, 0 unproved](https://img.shields.io/badge/SPARK%20proof-325%20checks%2C%200%20unproved-brightgreen)](docs/SPEC.md)
+[![trusted-core coverage 95%](https://img.shields.io/badge/trusted--core%20coverage-95%25-brightgreen)](scripts/coverage.sh)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](#)
 
 A secure, immutable backup vault that speaks S3. Point any S3 client or backup
