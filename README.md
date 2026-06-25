@@ -73,6 +73,8 @@ system clock cannot expire a lock.
 | `DEZHAN_DELETE_QUORUM` / `DEZHAN_APPROVERS` | four-eyes deletes | `0` / unset |
 | `DEZHAN_APPROVAL_TTL` | seconds a staged delete approval stays valid | `3600` |
 | `DEZHAN_SCRUB_INTERVAL` | seconds between integrity scrubs | `300` |
+| `DEZHAN_CHECKPOINT_INTERVAL` | seconds between audit checkpoints (0 = off) | `0` |
+| `DEZHAN_GC_INTERVAL` | seconds between garbage-collection passes (0 = off) | `0` |
 
 `dezhan_server [port] [data-dir]`. Operations: `GET /healthz`, `GET /metrics`
 (Prometheus), `POST /admin/{seal,scrub,checkpoint}`, web UI at `/`. Run

@@ -336,6 +336,14 @@ procedure Dezhan_Server is
    end Env_Nat;
 
    Delete_Quorum : constant Natural := Env_Nat ("DEZHAN_DELETE_QUORUM", 0);
+
+   --  Scheduler: optional recurring maintenance (0 disables the job).
+   --  DEZHAN_CHECKPOINT_INTERVAL signs the audit head periodically;
+   --  DEZHAN_GC_INTERVAL reclaims unreferenced chunks periodically.
+   Checkpoint_Interval : constant Duration :=
+     Duration (Env_Nat ("DEZHAN_CHECKPOINT_INTERVAL", 0));
+   GC_Interval : constant Duration :=
+     Duration (Env_Nat ("DEZHAN_GC_INTERVAL", 0));
    Approvers_Raw : constant String  := Env ("DEZHAN_APPROVERS", "");
 
    --  Is Tok one of the comma-separated, space-trimmed elements of List?
@@ -2162,6 +2170,46 @@ procedure Dezhan_Server is
          Vault_Lock.Release;
       end loop;
    end Scrubber;
+
+   --  Scheduled audit checkpointing (disabled when the interval is 0).
+   task Checkpointer;
+   task body Checkpointer is
+   begin
+      if Checkpoint_Interval > 0.0 then
+         loop
+            delay Checkpoint_Interval;
+            Vault_Lock.Acquire;
+            begin
+               Make_Checkpoint (V);
+            exception
+               when others => null;
+            end;
+            Vault_Lock.Release;
+         end loop;
+      end if;
+   end Checkpointer;
+
+   --  Scheduled garbage collection of unreferenced chunks (disabled at 0).
+   task Collector;
+   task body Collector is
+      Reclaimed : Natural;
+   begin
+      if GC_Interval > 0.0 then
+         loop
+            delay GC_Interval;
+            Vault_Lock.Acquire;
+            begin
+               Reclaimed := Collect_Garbage (V);
+               if Reclaimed > 0 then
+                  Put_Line ("gc: reclaimed" & Natural'Image (Reclaimed) & " object(s)");
+               end if;
+            exception
+               when others => null;
+            end;
+            Vault_Lock.Release;
+         end loop;
+      end if;
+   end Collector;
 
 begin
    Open (V, Root, Key);
