@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -112,6 +113,21 @@ func TestReconcileCreatesResources(t *testing.T) {
 	}
 	if got2.Status.Endpoint != "test-vault.default.svc:8080" {
 		t.Errorf("status endpoint: got %q", got2.Status.Endpoint)
+	}
+
+	// PodDisruptionBudget protects the single writer (minAvailable=1).
+	var pdb policyv1.PodDisruptionBudget
+	if err := c.Get(ctx, key, &pdb); err != nil {
+		t.Fatalf("pdb not created: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("pdb: want minAvailable=1, got %v", pdb.Spec.MinAvailable)
+	}
+
+	// StatefulSet retains its PVC on delete/scale (data must outlive the object).
+	if rp := sts.Spec.PersistentVolumeClaimRetentionPolicy; rp == nil ||
+		rp.WhenDeleted != appsv1.RetainPersistentVolumeClaimRetentionPolicyType {
+		t.Errorf("statefulset: PVC retention policy should be Retain on delete")
 	}
 
 	// No update churn: a second reconcile against a steady state must not

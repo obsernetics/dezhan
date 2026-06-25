@@ -5,6 +5,18 @@ metadata:
   labels:
     app.kubernetes.io/name: dezhan-operator
 ---
+# Keep at least one operator replica during voluntary disruptions.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dezhan-operator
+  namespace: dezhan-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dezhan-operator
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,7 +25,7 @@ metadata:
   labels:
     app.kubernetes.io/name: dezhan-operator
 spec:
-  replicas: 1
+  replicas: 2          # HA: one active leader, one standby (leader election)
   selector:
     matchLabels:
       app.kubernetes.io/name: dezhan-operator

@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +45,7 @@ type DezhanVaultReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *DezhanVaultReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -69,6 +71,9 @@ func (r *DezhanVaultReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	if err := r.reconcilePVCExpansion(ctx, &vault); err != nil {
 		return r.fail(ctx, &vault, "ExpansionError", err)
+	}
+	if err := r.reconcilePDB(ctx, &vault); err != nil {
+		return r.fail(ctx, &vault, "PDBError", err)
 	}
 
 	var sts appsv1.StatefulSet
@@ -168,6 +173,14 @@ func (r *DezhanVaultReconciler) reconcileStatefulSet(ctx context.Context, v *dez
 		replicas := int32(1)
 		sts.Labels = mergeLabels(sts.Labels, labelsFor(v.Name))
 		sts.Spec.Replicas = &replicas
+		// Consider the pod ready only after it has stayed up briefly.
+		sts.Spec.MinReadySeconds = 10
+		// Never delete the data PVC when the StatefulSet is deleted or scaled;
+		// vault data must outlive the workload object.
+		sts.Spec.PersistentVolumeClaimRetentionPolicy = &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
+			WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+			WhenScaled:  appsv1.RetainPersistentVolumeClaimRetentionPolicyType,
+		}
 
 		// Selector, ServiceName, and VolumeClaimTemplates are immutable after
 		// creation; set them once. Mutating them later is rejected by the API.
@@ -196,10 +209,25 @@ func (r *DezhanVaultReconciler) reconcileStatefulSet(ctx context.Context, v *dez
 	return err
 }
 
-// applyPodSpec reconciles only the fields the operator owns, in place, so the
-// API server's pod-template defaults (imagePullPolicy, dnsPolicy, ...) are left
-// untouched. Replacing the whole PodSpec each pass would fight those defaults
-// and spin the controller in a hot update loop.
+// reconcilePDB keeps a PodDisruptionBudget (minAvailable=1) for the vault so a
+// node drain or cluster upgrade cannot voluntarily evict the single writer
+// without a deliberate eviction. If disabled, any existing PDB is removed.
+func (r *DezhanVaultReconciler) reconcilePDB(ctx context.Context, v *dezhanv1alpha1.DezhanVault) error {
+	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: v.Namespace}}
+	if v.Spec.DisablePodDisruptionBudget {
+		err := r.Delete(ctx, pdb)
+		return client.IgnoreNotFound(err)
+	}
+	minAvail := intstr.FromInt32(1)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
+		pdb.Labels = mergeLabels(pdb.Labels, labelsFor(v.Name))
+		pdb.Spec.MinAvailable = &minAvail
+		pdb.Spec.Selector = &metav1.LabelSelector{MatchLabels: labelsFor(v.Name)}
+		return controllerutil.SetControllerReference(v, pdb, r.Scheme)
+	})
+	return err
+}
+
 // reconcilePVCExpansion grows the vault's PersistentVolumeClaim when spec.storage
 // increases. StatefulSet volumeClaimTemplates are immutable, so online expansion
 // is done by patching the live PVC (data-<name>-0). The StorageClass must allow
@@ -230,11 +258,18 @@ func (r *DezhanVaultReconciler) reconcilePVCExpansion(ctx context.Context, v *de
 	return nil
 }
 
+// applyPodSpec reconciles only the fields the operator owns, in place, so the
+// API server's pod-template defaults (imagePullPolicy, dnsPolicy, ...) are left
+// untouched. Replacing the whole PodSpec each pass would fight those defaults
+// and spin the controller in a hot update loop.
 func applyPodSpec(spec *corev1.PodSpec, v *dezhanv1alpha1.DezhanVault) {
 	spec.SecurityContext = &corev1.PodSecurityContext{
 		RunAsNonRoot: ptr(true),
 		FSGroup:      ptr[int64](fieldOwnerUID),
 	}
+	spec.PriorityClassName = v.Spec.PriorityClassName
+	// Give the vault time to flush its journal/snapshot on shutdown.
+	spec.TerminationGracePeriodSeconds = ptr[int64](60)
 
 	var c *corev1.Container
 	for i := range spec.Containers {
@@ -257,6 +292,15 @@ func applyPodSpec(spec *corev1.PodSpec, v *dezhanv1alpha1.DezhanVault) {
 	c.Resources = v.Spec.Resources
 	c.ReadinessProbe = healthProbe(v.Spec.Port, 3)
 	c.LivenessProbe = healthProbe(v.Spec.Port, 10)
+	// Startup probe tolerates a slow first boot (journal replay over a large
+	// vault) without the liveness probe killing the pod: up to 5 min.
+	c.StartupProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt32(v.Spec.Port)},
+		},
+		PeriodSeconds:    5,
+		FailureThreshold: 60,
+	}
 	c.SecurityContext = &corev1.SecurityContext{
 		AllowPrivilegeEscalation: ptr(false),
 		ReadOnlyRootFilesystem:   ptr(true),
@@ -342,5 +386,6 @@ func (r *DezhanVaultReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&dezhanv1alpha1.DezhanVault{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Complete(r)
 }

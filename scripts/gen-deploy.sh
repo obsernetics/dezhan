@@ -24,8 +24,9 @@ OUT=deploy/dezhan.yaml
   echo "---"
   cat operator/config/rbac/rbac.yaml
   echo "---"
-  # Deployment only (skip the Namespace already emitted above).
-  awk '/^apiVersion: apps\/v1/{p=1} p' operator/config/manager/manager.yaml
+  # Everything after the Namespace doc (operator PDB + Deployment); the
+  # Namespace is emitted above.
+  awk 'f{print} /^---/{f=1}' operator/config/manager/manager.yaml
 } > "$OUT"
 
 echo "wrote $OUT ($(grep -c '^kind:' "$OUT") resources)"

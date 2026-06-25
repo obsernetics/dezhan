@@ -1,7 +1,7 @@
 # dezhan operator Helm values.
 operator:
   image: ghcr.io/obsernetics/dezhan-operator:latest
-  replicas: 1
+  replicas: 2          # HA: leader + standby (leader election)
   leaderElect: true
   resources:
     requests: {cpu: 50m, memory: 64Mi}

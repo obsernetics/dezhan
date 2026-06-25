@@ -59,6 +59,18 @@ type DezhanVaultSpec struct {
 	// +kubebuilder:default="ClusterIP"
 	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
 	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
+
+	// PriorityClassName schedules the vault pod with a priority class so it is
+	// not evicted before less critical pods under node pressure.
+	// +optional
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+
+	// DisablePodDisruptionBudget turns off the PodDisruptionBudget. By default
+	// the operator creates a PDB (minAvailable=1) so voluntary disruptions
+	// (node drains, upgrades) do not take the single writer down without an
+	// explicit, deliberate eviction.
+	// +optional
+	DisablePodDisruptionBudget bool `json:"disablePodDisruptionBudget,omitempty"`
 }
 
 // DezhanVaultStatus reports the observed state of a vault.

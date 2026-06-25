@@ -79,6 +79,10 @@ spec:
                     - ClusterIP
                     - NodePort
                     - LoadBalancer
+                priorityClassName:
+                  type: string
+                disablePodDisruptionBudget:
+                  type: boolean
                 resources:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
