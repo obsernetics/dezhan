@@ -12,51 +12,24 @@ encrypted, erasure-coded, and WORM-locked so it cannot be changed or deleted
 before its retention expires. The integrity core is formally verified in SPARK.
 An on-prem alternative to MinIO and Veeam.
 
-## Run on Kubernetes
+## Install
 
-Install the operator and declare a vault:
-
-```sh
-kubectl apply -f operator/config/crd/
-kubectl apply -f operator/config/rbac/
-kubectl apply -f operator/config/manager/
-```
-
-```yaml
-apiVersion: dezhan.obsernetics.io/v1alpha1
-kind: DezhanVault
-metadata:
-  name: my-vault
-spec:
-  storage: 100Gi
-  requireAuth: true
-  deleteQuorum: 2          # deletes need 2 approver co-signatures
-  secretName: my-secrets  # DEZHAN_VAULT_KEY, DEZHAN_SECRET, ...
-```
+Kubernetes (deploys the operator and a vault, generates credentials):
 
 ```sh
-kubectl apply -f my-vault.yaml
-kubectl get dezhanvaults     # READY, ENDPOINT
+./install-k8s.sh
 ```
 
-The vault is reachable in-cluster at `http://my-vault.<namespace>.svc:8080`. Full
-spec: [operator/README.md](operator/README.md).
-
-## Run on-prem (without Kubernetes)
+On-prem with Docker (builds, runs, generates credentials):
 
 ```sh
-docker build -t dezhan .
-docker run -p 8080:8080 -v dezhan-data:/data \
-  -e DEZHAN_VAULT_KEY="a-strong-passphrase" -e DEZHAN_REQUIRE_AUTH=1 dezhan
+./install.sh
 ```
 
-Or build the static binary (needs the Ada/SPARK toolchain via
-[Alire](https://alire.ada.dev)) and run it directly:
-
-```sh
-gprbuild -P dezhan.gpr
-DEZHAN_VAULT_KEY=... DEZHAN_REQUIRE_AUTH=1 server/obj/dezhan_server 8080 /var/lib/dezhan
-```
+Both print the endpoint, access key, secret, and vault key. Tune with env vars
+(`DEZHAN_STORAGE`, `DEZHAN_PORT`, `DEZHAN_VAULT_KEY`, ...); see the script
+headers and [operator/README.md](operator/README.md) for the full `DezhanVault`
+spec.
 
 ## Use it
 
