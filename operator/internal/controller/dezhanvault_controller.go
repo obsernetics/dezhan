@@ -265,6 +265,7 @@ func (r *DezhanVaultReconciler) reconcilePVCExpansion(ctx context.Context, v *de
 func applyPodSpec(spec *corev1.PodSpec, v *dezhanv1alpha1.DezhanVault) {
 	spec.SecurityContext = &corev1.PodSecurityContext{
 		RunAsNonRoot: ptr(true),
+		RunAsUser:    ptr[int64](fieldOwnerUID), // numeric: the image's USER is non-numeric (nonroot)
 		FSGroup:      ptr[int64](fieldOwnerUID),
 	}
 	spec.PriorityClassName = v.Spec.PriorityClassName
