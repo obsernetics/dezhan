@@ -485,33 +485,43 @@ Provide:
 
 ---
 
-## Future Roadmap
+## Future Roadmap (final status)
+
+Everything not explicitly excluded has been implemented. Status:
 
 Phase 2:
 
-* Filesystem movers
-* PostgreSQL protection
-* MySQL protection
-* Policy engine
-* Scheduler
+* Filesystem movers (excluded)
+* PostgreSQL protection (excluded: database mover)
+* MySQL protection (excluded: database mover)
+* Policy engine: implemented (per-bucket RBAC: default + per-bucket ro/rw/none)
+* Scheduler: implemented (recurring scrub, audit checkpoint, GC)
 
 Phase 3:
 
-* Air-gap orchestration
-* Quorum workflows
-* Advanced RBAC
+* Air-gap orchestration: implemented (admin seal / ingest-only / sync-window,
+  plus example CronJobs to drive sync windows)
+* Quorum workflows: implemented (synchronous and staged four-eyes delete)
+* Advanced RBAC: implemented (per-bucket policies, API tokens / service accounts)
 
 Phase 4:
 
-* Kubernetes protection
-* CSI snapshots
-* etcd backup
+* Kubernetes protection (excluded as a backup mover; the CSI driver and operator
+  cover the storage path)
+* CSI snapshots: implemented
+* etcd backup: implemented (example CronJob)
 
 Phase 5:
 
-* Compliance certifications
-* FIPS support
-* Independent verification of immutability claims
+* Compliance certifications: external process, not code
+* FIPS support: hash/HMAC/KDF use FIPS-approved primitives; full FIPS 140
+  operation requires a validated cryptographic module and an approved data
+  cipher (AES-256-GCM), which is a certification effort, not a runtime toggle
+* Independent verification of immutability claims: implemented (dezhan_verify
+  re-checks the signed audit chain offline)
+
+Explicitly excluded (non-goals): multi-site replication, filesystem and database
+movers, full enterprise IAM, tape, native Terraform provider.
 
 ---
 
