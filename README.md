@@ -60,6 +60,12 @@ conditional requests, presigned URLs, SigV4, and Object Lock / WORM with legal
 hold. Retention is enforced by a formally verified state machine, and a tampered
 system clock cannot expire a lock.
 
+Buckets are mutable (Standard) by default (overwrite in place, free delete);
+enabling Object Lock makes a bucket Immutable/WORM. For Kubernetes, example
+CronJobs orchestrate an air-gap sync window
+([deploy/airgap-sync.yaml](deploy/airgap-sync.yaml)) and back up etcd into a
+vault ([deploy/etcd-backup.yaml](deploy/etcd-backup.yaml)).
+
 ## Configuration
 
 | Variable | Meaning | Default |

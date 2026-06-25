@@ -1,0 +1,47 @@
+# Air-gap sync-window orchestration (Phase 3). Keep the vault ingest-only and
+# open a timed sync window on a schedule, then close it. Drives the server admin
+# endpoints; needs DEZHAN_ADMIN_TOKEN set on the vault and supplied here via the
+# dezhan-admin secret (key: token).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dezhan-open-sync-window
+  namespace: dezhan-system
+spec:
+  schedule: "0 2 * * *"     # open the window at 02:00
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: open
+              image: curlimages/curl:8.9.1
+              env:
+                - name: TOKEN
+                  valueFrom: {secretKeyRef: {name: dezhan-admin, key: token}}
+              command: ["/bin/sh", "-c"]
+              args:
+                - 'curl -fsS -X POST -H "X-Dezhan-Admin-Token: $TOKEN" "http://dezhan.default.svc:8080/admin/sync-window?open=1"'
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dezhan-close-sync-window
+  namespace: dezhan-system
+spec:
+  schedule: "0 4 * * *"     # close it at 04:00 (back to ingest-only)
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: close
+              image: curlimages/curl:8.9.1
+              env:
+                - name: TOKEN
+                  valueFrom: {secretKeyRef: {name: dezhan-admin, key: token}}
+              command: ["/bin/sh", "-c"]
+              args:
+                - 'curl -fsS -X POST -H "X-Dezhan-Admin-Token: $TOKEN" "http://dezhan.default.svc:8080/admin/sync-window?open=0"'

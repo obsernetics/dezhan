@@ -1,0 +1,66 @@
+# Scheduled etcd backup into a dezhan vault (Phase 4: etcd backup).
+# An init container snapshots etcd; the main container uploads the snapshot to
+# an Object-Lock (WORM) bucket on dezhan so it cannot be tampered with.
+#
+# Edit: the etcd endpoint/cert paths, the dezhan endpoint, and the secret
+# (dezhan-s3 with AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY). Run on a node with
+# access to the etcd client certs (control-plane), or point ETCDCTL_ENDPOINTS at
+# a reachable etcd with mounted certs.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: etcd-backup
+  namespace: dezhan-system
+spec:
+  schedule: "0 */6 * * *"   # every 6 hours
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          hostNetwork: true
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          tolerations:
+            - operator: Exists
+          volumes:
+            - name: snap
+              emptyDir: {}
+            - name: etcd-certs
+              hostPath:
+                path: /etc/kubernetes/pki/etcd
+                type: Directory
+          initContainers:
+            - name: snapshot
+              image: registry.k8s.io/etcd:3.5.15-0
+              env:
+                - name: ETCDCTL_API
+                  value: "3"
+                - name: ETCDCTL_ENDPOINTS
+                  value: "https://127.0.0.1:2379"
+                - name: ETCDCTL_CACERT
+                  value: /etc/etcd/pki/ca.crt
+                - name: ETCDCTL_CERT
+                  value: /etc/etcd/pki/server.crt
+                - name: ETCDCTL_KEY
+                  value: /etc/etcd/pki/server.key
+              command: ["/bin/sh", "-c"]
+              args:
+                - etcdctl snapshot save /snap/etcd-$(date +%Y%m%dT%H%M%SZ).db
+              volumeMounts:
+                - {name: snap, mountPath: /snap}
+                - {name: etcd-certs, mountPath: /etc/etcd/pki, readOnly: true}
+          containers:
+            - name: upload
+              image: amazon/aws-cli:2.17.0
+              envFrom:
+                - secretRef:
+                    name: dezhan-s3   # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+              command: ["/bin/sh", "-c"]
+              args:
+                - aws --endpoint-url http://dezhan.default.svc:8080 --region us-east-1
+                  s3 cp /snap/ s3://etcd-backups/ --recursive
+              volumeMounts:
+                - {name: snap, mountPath: /snap}

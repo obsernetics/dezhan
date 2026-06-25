@@ -149,10 +149,21 @@ credentials file plus the seeded demo account) and query-string canonicalization
 against real S3 clients (Veeam/restic), whose exact canonicalization should be
 confirmed end to end, and management of the vault's data-encryption key (a fixed
 demo key is used at rest).
-- General-purpose Standard (mutable) per-bucket mode alongside Immutable, so
-  dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays
-  the headline. Both modes share the S3 API, storage engine, audit chain, and
-  scrubbing; only Immutable buckets use the retention state machine.
+- General-purpose Standard (mutable) per-bucket mode alongside Immutable:
+  implemented as the default. A plain bucket is mutable (overwrite in place,
+  free delete); enabling Object Lock makes a bucket Immutable/WORM. Both modes
+  share the S3 API, storage engine, audit chain, and scrubbing; only Immutable
+  buckets use the retention state machine.
+- Policy engine: the per-bucket RBAC (default + per-bucket ro/rw/none) is the
+  authorization policy engine; principals and API tokens bind to these policies.
+- Scheduler: recurring scrub (DEZHAN_SCRUB_INTERVAL), audit checkpoint
+  (DEZHAN_CHECKPOINT_INTERVAL), and GC (DEZHAN_GC_INTERVAL) background jobs.
+- etcd backup (deploy/etcd-backup.yaml) and air-gap sync-window orchestration
+  (deploy/airgap-sync.yaml) are CronJob examples driving the vault.
+- FIPS: SHA-256/512, HMAC, and PBKDF2 are FIPS-approved primitives. Full FIPS
+  140 operation additionally requires a validated cryptographic module and an
+  approved data cipher (e.g. AES-256-GCM in place of ChaCha20); that is a
+  certification effort with a validated module, not a runtime toggle.
 - Local auth realm with SigV4 credentials, RBAC (per-credential default of
   rw/ro/none plus per-bucket overrides via "akid secret [default] [bucket:perm]"),
   an admin-token gate for the /admin control plane, and a four-eyes delete quorum
