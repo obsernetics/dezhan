@@ -1762,7 +1762,8 @@ procedure Dezhan_Server is
    task body Scrubber is
    begin
       loop
-         delay 30.0;
+         delay 300.0;   --  periodic integrity scrub (holds the vault lock for
+                        --  an O(N) pass, so run it infrequently)
          Vault_Lock.Acquire;
          begin
             Last_Scrub := Scrub (V);

@@ -1,0 +1,42 @@
+name: release
+
+# On a v* tag: build statically-linked binaries, generate a CycloneDX SBOM, and
+# attach both to the GitHub release. The SPARK proof gate (ci.yml) must already
+# be green for the commit being tagged.
+on:
+  push:
+    tags: [ "v*" ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: alire-project/setup-alire@v4
+        with:
+          toolchain: gnat_native^14 gprbuild
+
+      - name: Build release binaries (static runtime)
+        run: |
+          gprbuild -p -P dezhan.gpr -XBUILD=release \
+            -cargs -O2 -gnatn -bargs -static -largs -static-libgcc
+          mkdir -p dist
+          cp server/obj/dezhan_server cli/obj/dezhan_cli verifier/obj/dezhan_verify dist/
+          ( cd dist && sha256sum * > SHA256SUMS )
+
+      - name: Generate SBOM
+        run: sh scripts/sbom.sh "${GITHUB_REF_NAME#v}" > dist/dezhan.cdx.json
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/dezhan_server
+            dist/dezhan_cli
+            dist/dezhan_verify
+            dist/SHA256SUMS
+            dist/dezhan.cdx.json

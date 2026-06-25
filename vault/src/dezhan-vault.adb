@@ -97,7 +97,14 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Versioned  : Bucket_Maps.Map;  --  buckets with versioning enabled
       Versions   : Ver_Maps.Map;     --  "bucket/key" -> version history
       Ver_Seq    : Natural := 0;     --  monotonic version-id source
+      Jrnl_Count : Natural := 0;     --  journal records since the last snapshot
+      Jrnl_Buf   : Unbounded_String; --  records pending in the current commit
+      Jrnl_Pend  : Natural := 0;     --  records buffered but not yet flushed
    end record;
+
+   --  Compact (rewrite a full snapshot, clear the journal) after this many
+   --  appended records, bounding both the journal size and replay time.
+   Compact_Limit : constant := 20_000;
 
    --  Writes are refused only by an operator seal (air-gap read-only). A clock
    --  anomaly is a separate alarm (surfaced by Sealed/metrics): it does not by
@@ -127,16 +134,24 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       return SHA256 (B);
    end Name_Digest;
 
+   --  Forward declarations: the journal serializer and appender are defined
+   --  with the persistence code below, but Add_Audit (above the callers) uses
+   --  them to record each audit entry incrementally.
+   function A_Line (E : Audit_Entry) return String;
+   procedure Append_Jrnl (V : Vault_Type; Line : String);
+
    procedure Add_Audit
      (V       : in out Vault_Type;
       Kind    : Audit_Event;
       Subject : Digest;
       Detail  : Trusted_Time)
    is
-      Last : constant Audit_Entry := V.Self.Log.Last_Element;
+      E : constant Audit_Entry :=
+        Append (V.Self.Log.Last_Element, CG.Now (V.Self.Clock),
+                Kind, Subject, Detail);
    begin
-      V.Self.Log.Append
-        (Append (Last, CG.Now (V.Self.Clock), Kind, Subject, Detail));
+      V.Self.Log.Append (E);
+      Append_Jrnl (V, A_Line (E));
    end Add_Audit;
 
    --  ---- Durable persistence (text snapshot, atomically replaced) ----
@@ -219,145 +234,239 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       return "";
    end Field;
 
+   function Journal_Path (V : Vault_Type) return String is
+     (Compose (To_String (V.Self.Root), "vault.journal"));
+
+   --  ---- Record serializers (shared by the snapshot and the journal) ----
+   function Core_Clock (V : Vault_Type) return String is
+     ("CLOCK " & Trusted_Time'Image (CG.Now (V.Self.Clock))
+      & (if CG.Is_Sealed (V.Self.Clock) then " 1" else " 0")
+      & (if V.Self.Op_Sealed then " 1" else " 0"));
+   function Core_Boot (V : Vault_Type) return String is
+     ("BOOT " & To_String (V.Self.Last_Boot));
+   function Core_Modes (V : Vault_Type) return String is
+     ("MODES " & (if V.Self.Ingest_Only then "1" else "0")
+      & " " & (if V.Self.Sync_Shut then "1" else "0"));
+   function Core_Vseq (V : Vault_Type) return String is
+     ("VSEQ" & Natural'Image (V.Self.Ver_Seq));
+   function Bkt_Line (Name : String; Lock : Boolean) return String is
+     ("BKT " & Str_To_Hex (Name) & (if Lock then " 1" else " 0"));
+   function Vsn_Line (Name : String; On : Boolean) return String is
+     ("VSN " & Str_To_Hex (Name) & (if On then " 1" else " 0"));
+   function Ver_Line (Name : String; E : Version_Entry) return String is
+     ("VER " & Str_To_Hex (Name) & " " & To_String (E.Vid)
+      & " " & String (E.Id) & Natural'Image (E.Size)
+      & (if E.Deleted then " 1" else " 0")
+      & " " & Str_To_Hex (To_String (E.Meta)));
+   function Obj_Line (Name : String; M : Meta) return String is
+     ("OBJ " & Str_To_Hex (Name) & " " & String (M.Id)
+      & Lock_Mode'Pos (M.Lock.Mode)'Image
+      & M.Lock.Retain_Until'Image & M.Lock.Created_At'Image
+      & (if M.Composite then " 1" else " 0")
+      & (if M.Lock.Legal_Hold then " 1" else " 0")
+      & (if M.Quarantined then " 1" else " 0")
+      & Natural'Image (M.Size)
+      & " " & Str_To_Hex (To_String (M.User_Meta)));
+
+   function A_Line (E : Audit_Entry) return String is
+     ("A" & E.Seq'Image & E.Time'Image & Audit_Event'Pos (E.Kind)'Image
+      & " " & To_Hex (E.Subject) & E.Detail'Image
+      & " " & To_Hex (E.Prev_Hash) & " " & To_Hex (E.Hash));
+
+   --  Full snapshot: write the entire state atomically, then start a fresh,
+   --  empty journal. Used at open and as periodic compaction; also the persist
+   --  path for infrequent (non-hot) mutations.
    procedure Save (V : Vault_Type) is
       Tmp : constant String := State_Path (V) & ".tmp";
       F   : File_Type;
    begin
       Create (F, Out_File, Tmp);
       Put_Line (F, "DEZHAN_VAULT 1");
-      Put_Line (F, "CLOCK " & Trusted_Time'Image (CG.Now (V.Self.Clock))
-                   & (if CG.Is_Sealed (V.Self.Clock) then " 1" else " 0")
-                   & (if V.Self.Op_Sealed then " 1" else " 0"));
-      Put_Line (F, "BOOT " & To_String (V.Self.Last_Boot));
-      Put_Line (F, "MODES " & (if V.Self.Ingest_Only then "1" else "0")
-                   & " " & (if V.Self.Sync_Shut then "1" else "0"));
+      Put_Line (F, Core_Clock (V));
+      Put_Line (F, Core_Boot (V));
+      Put_Line (F, Core_Modes (V));
       for Cur in V.Self.Buckets.Iterate loop
-         Put_Line (F, "BKT " & Str_To_Hex (Bucket_Maps.Key (Cur))
-                      & (if Bucket_Maps.Element (Cur) then " 1" else " 0"));
+         Put_Line (F, Bkt_Line (Bucket_Maps.Key (Cur), Bucket_Maps.Element (Cur)));
       end loop;
       for Cur in V.Self.Versioned.Iterate loop
          if Bucket_Maps.Element (Cur) then
-            Put_Line (F, "VSN " & Str_To_Hex (Bucket_Maps.Key (Cur)));
+            Put_Line (F, Vsn_Line (Bucket_Maps.Key (Cur), True));
          end if;
       end loop;
-      Put_Line (F, "VSEQ" & Natural'Image (V.Self.Ver_Seq));
+      Put_Line (F, Core_Vseq (V));
       for Cur in V.Self.Versions.Iterate loop
-         declare
-            Name : constant String := Ver_Maps.Key (Cur);
-         begin
-            for E of Ver_Maps.Element (Cur) loop
-               --  Fields: VER name vid id size deleted meta-hex (meta last so an
-               --  empty value collapses harmlessly).
-               Put_Line (F, "VER " & Str_To_Hex (Name) & " " & To_String (E.Vid)
-                            & " " & String (E.Id) & Natural'Image (E.Size)
-                            & (if E.Deleted then " 1" else " 0")
-                            & " " & Str_To_Hex (To_String (E.Meta)));
-            end loop;
-         end;
+         for E of Ver_Maps.Element (Cur) loop
+            Put_Line (F, Ver_Line (Ver_Maps.Key (Cur), E));
+         end loop;
       end loop;
       for Cur in V.Self.Index.Iterate loop
-         declare
-            Name : constant String := Meta_Maps.Key (Cur);
-            M    : constant Meta    := Meta_Maps.Element (Cur);
-         begin
-            Put_Line (F, "OBJ " & Str_To_Hex (Name) & " " & String (M.Id)
-                         & Lock_Mode'Pos (M.Lock.Mode)'Image
-                         & M.Lock.Retain_Until'Image
-                         & M.Lock.Created_At'Image
-                         & (if M.Composite then " 1" else " 0")
-                         & (if M.Lock.Legal_Hold then " 1" else " 0")
-                         & (if M.Quarantined then " 1" else " 0")
-                         & Natural'Image (M.Size)
-                         & " " & Str_To_Hex (To_String (M.User_Meta)));
-         end;
+         Put_Line (F, Obj_Line (Meta_Maps.Key (Cur), Meta_Maps.Element (Cur)));
       end loop;
       Put_Line (F, "AUDIT" & Natural'Image (Natural (V.Self.Log.Length)));
       for I in 0 .. Natural (V.Self.Log.Length) - 1 loop
-         declare
-            E : constant Audit_Entry := V.Self.Log.Element (I);
-         begin
-            Put_Line (F, "A" & E.Seq'Image & E.Time'Image
-                         & Audit_Event'Pos (E.Kind)'Image
-                         & " " & To_Hex (E.Subject) & E.Detail'Image
-                         & " " & To_Hex (E.Prev_Hash)
-                         & " " & To_Hex (E.Hash));
-         end;
+         Put_Line (F, A_Line (V.Self.Log.Element (I)));
       end loop;
       Close (F);
-      --  Crash-safe publish: flush the temp file, then atomically rename it
-      --  over the live state and flush the directory. A crash leaves either the
-      --  old complete state or the new complete state, never a partial file.
       Sync.Fsync (Tmp);
       Sync.Durable_Rename (Tmp, State_Path (V), To_String (V.Self.Root));
+      --  The snapshot now holds everything: reset the journal and any buffer.
+      declare
+         J : File_Type;
+      begin
+         Create (J, Out_File, Journal_Path (V));
+         Close (J);
+         Sync.Fsync (Journal_Path (V));
+      end;
+      V.Self.Jrnl_Count := 0;
+      V.Self.Jrnl_Buf   := Null_Unbounded_String;
+      V.Self.Jrnl_Pend  := 0;
    end Save;
 
-   procedure Load (V : in out Vault_Type) is
-      F : File_Type;
+   --  Buffer one delta for the current mutation (no I/O yet); Commit_Jrnl
+   --  flushes the whole batch with a single fsync.
+   procedure Append_Jrnl (V : Vault_Type; Line : String) is
    begin
-      Open (F, In_File, State_Path (V));
-      while not End_Of_File (F) loop
+      Append (V.Self.Jrnl_Buf, Line & ASCII.LF);
+      V.Self.Jrnl_Pend := V.Self.Jrnl_Pend + 1;
+   end Append_Jrnl;
+
+   --  Group commit: write all buffered records and fsync once. Compacts to a
+   --  fresh snapshot (which also flushes) once the journal grows past the limit.
+   procedure Commit_Jrnl (V : Vault_Type) is
+      J : File_Type;
+   begin
+      if V.Self.Jrnl_Pend = 0 then
+         return;
+      end if;
+      if V.Self.Jrnl_Count + V.Self.Jrnl_Pend >= Compact_Limit then
+         Save (V);   --  snapshot captures the in-memory state and clears buffer
+         return;
+      end if;
+      begin
+         Open (J, Append_File, Journal_Path (V));
+      exception
+         when others => Create (J, Out_File, Journal_Path (V));
+      end;
+      Put (J, To_String (V.Self.Jrnl_Buf));
+      Close (J);
+      Sync.Fsync (Journal_Path (V));
+      V.Self.Jrnl_Count := V.Self.Jrnl_Count + V.Self.Jrnl_Pend;
+      V.Self.Jrnl_Buf   := Null_Unbounded_String;
+      V.Self.Jrnl_Pend  := 0;
+   end Commit_Jrnl;
+
+   --  Hot-path journal helpers.
+   procedure J_Obj (V : Vault_Type; Name : String) is
+   begin
+      Append_Jrnl (V, Obj_Line (Name, V.Self.Index.Element (Name)));
+   end J_Obj;
+   procedure J_Del (V : Vault_Type; Name : String) is
+   begin
+      Append_Jrnl (V, "DEL " & Str_To_Hex (Name));
+   end J_Del;
+   procedure J_Ver (V : Vault_Type; Name : String; E : Version_Entry) is
+   begin
+      Append_Jrnl (V, Ver_Line (Name, E));
+   end J_Ver;
+   procedure J_Vseq (V : Vault_Type) is
+   begin
+      Append_Jrnl (V, Core_Vseq (V));
+   end J_Vseq;
+
+   --  Apply one persisted record. Idempotent so the snapshot and then the
+   --  journal (which may overlap after a crash mid-compaction) can both be
+   --  replayed safely: object/bucket writes overwrite, deletes tolerate
+   --  absence, versions dedup by id, and audit entries dedup by sequence.
+   procedure Apply_Line (V : in out Vault_Type; Line : String) is
+      Tag : constant String := Field (Line, 1);
+   begin
+      if Tag = "CLOCK" then
+         V.Self.Clock :=
+           (Floor     => Trusted_Time'Value (Field (Line, 2)),
+            Last_Mono => 0, Last_Real => 0, Anomaly => CG.None,
+            Sealed    => Field (Line, 3) = "1");
+         V.Self.Op_Sealed := Field (Line, 4) = "1";
+         V.Self.Started := False;
+      elsif Tag = "BOOT" then
+         V.Self.Last_Boot := To_Unbounded_String (Field (Line, 2));
+      elsif Tag = "MODES" then
+         V.Self.Ingest_Only := Field (Line, 2) = "1";
+         V.Self.Sync_Shut   := Field (Line, 3) = "1";
+      elsif Tag = "BKT" then
+         V.Self.Buckets.Include
+           (Hex_To_Str (Field (Line, 2)), Field (Line, 3) = "1");
+      elsif Tag = "BKD" then
          declare
-            Line : constant String := Get_Line (F);
-            Tag  : constant String := Field (Line, 1);
+            N : constant String := Hex_To_Str (Field (Line, 2));
          begin
-            if Tag = "CLOCK" then
-               V.Self.Clock :=
-                 (Floor     => Trusted_Time'Value (Field (Line, 2)),
-                  Last_Mono => 0,
-                  Last_Real => 0,
-                  Anomaly   => CG.None,
-                  Sealed    => Field (Line, 3) = "1");
-               V.Self.Op_Sealed := Field (Line, 4) = "1";
-               V.Self.Started := False;  --  re-baseline monotonic on next tick
-            elsif Tag = "BOOT" then
-               V.Self.Last_Boot := To_Unbounded_String (Field (Line, 2));
-            elsif Tag = "MODES" then
-               V.Self.Ingest_Only := Field (Line, 2) = "1";
-               V.Self.Sync_Shut   := Field (Line, 3) = "1";
-            elsif Tag = "BKT" then
-               V.Self.Buckets.Include
-                 (Hex_To_Str (Field (Line, 2)), Field (Line, 3) = "1");
-            elsif Tag = "VSN" then
-               V.Self.Versioned.Include (Hex_To_Str (Field (Line, 2)), True);
-            elsif Tag = "VSEQ" then
-               V.Self.Ver_Seq := Natural'Value (Field (Line, 2));
-            elsif Tag = "VER" then
-               declare
-                  Name : constant String := Hex_To_Str (Field (Line, 2));
-                  E    : constant Version_Entry :=
-                    (Vid     => To_Unbounded_String (Field (Line, 3)),
-                     Id      => Object_Id (Field (Line, 4)),
-                     Size    => Natural'Value (Field (Line, 5)),
-                     Deleted => Field (Line, 6) = "1",
-                     Meta     => To_Unbounded_String (Hex_To_Str (Field (Line, 7))));
-                  Vec  : Ver_Vecs.Vector;
-               begin
-                  if V.Self.Versions.Contains (Name) then
-                     Vec := V.Self.Versions.Element (Name);
+            if V.Self.Buckets.Contains (N) then
+               V.Self.Buckets.Delete (N);
+            end if;
+         end;
+      elsif Tag = "VSN" then
+         --  Old snapshots wrote no flag (meaning enabled); treat that as on.
+         V.Self.Versioned.Include
+           (Hex_To_Str (Field (Line, 2)), Field (Line, 3) /= "0");
+      elsif Tag = "VSEQ" then
+         V.Self.Ver_Seq := Natural'Value (Field (Line, 2));
+      elsif Tag = "VER" then
+         declare
+            Name : constant String := Hex_To_Str (Field (Line, 2));
+            Vid  : constant String := Field (Line, 3);
+            E    : constant Version_Entry :=
+              (Vid     => To_Unbounded_String (Vid),
+               Id      => Object_Id (Field (Line, 4)),
+               Size    => Natural'Value (Field (Line, 5)),
+               Deleted => Field (Line, 6) = "1",
+               Meta    => To_Unbounded_String (Hex_To_Str (Field (Line, 7))));
+            Vec  : Ver_Vecs.Vector;
+            Seen : Boolean := False;
+         begin
+            if V.Self.Versions.Contains (Name) then
+               Vec := V.Self.Versions.Element (Name);
+               for X of Vec loop
+                  if To_String (X.Vid) = Vid then
+                     Seen := True;
                   end if;
-                  Vec.Append (E);
-                  V.Self.Versions.Include (Name, Vec);
-               end;
-            elsif Tag = "OBJ" then
-               V.Self.Index.Include
-                 (Hex_To_Str (Field (Line, 2)),
-                  (Id   => Object_Id (Field (Line, 3)),
-                   Lock =>
-                     (Mode         =>
-                        Lock_Mode'Val (Integer'Value (Field (Line, 4))),
-                      Retain_Until => Trusted_Time'Value (Field (Line, 5)),
-                      Created_At   => Trusted_Time'Value (Field (Line, 6)),
-                      Legal_Hold   => Field (Line, 8) = "1"),
-                   Composite   => Field (Line, 7) = "1",
-                   Quarantined => Field (Line, 9) = "1",
-                   Size        => (if Field (Line, 10) = "" then 0
-                                   else Natural'Value (Field (Line, 10))),
-                   User_Meta   =>
-                     To_Unbounded_String (Hex_To_Str (Field (Line, 11)))));
-            elsif Tag = "A" then
+               end loop;
+            end if;
+            if not Seen then
+               Vec.Append (E);
+               V.Self.Versions.Include (Name, Vec);
+            end if;
+         end;
+      elsif Tag = "OBJ" then
+         V.Self.Index.Include
+           (Hex_To_Str (Field (Line, 2)),
+            (Id   => Object_Id (Field (Line, 3)),
+             Lock =>
+               (Mode         =>
+                  Lock_Mode'Val (Integer'Value (Field (Line, 4))),
+                Retain_Until => Trusted_Time'Value (Field (Line, 5)),
+                Created_At   => Trusted_Time'Value (Field (Line, 6)),
+                Legal_Hold   => Field (Line, 8) = "1"),
+             Composite   => Field (Line, 7) = "1",
+             Quarantined => Field (Line, 9) = "1",
+             Size        => (if Field (Line, 10) = "" then 0
+                             else Natural'Value (Field (Line, 10))),
+             User_Meta   =>
+               To_Unbounded_String (Hex_To_Str (Field (Line, 11)))));
+      elsif Tag = "DEL" then
+         declare
+            N : constant String := Hex_To_Str (Field (Line, 2));
+         begin
+            if V.Self.Index.Contains (N) then
+               V.Self.Index.Delete (N);
+            end if;
+         end;
+      elsif Tag = "A" then
+         declare
+            Seq : constant Natural := Natural'Value (Field (Line, 2));
+         begin
+            if Seq = Natural (V.Self.Log.Length) then   --  next expected
                V.Self.Log.Append
                  (Audit_Entry'
-                    (Seq       => Natural'Value (Field (Line, 2)),
+                    (Seq       => Seq,
                      Time      => Trusted_Time'Value (Field (Line, 3)),
                      Kind      =>
                        Audit_Event'Val (Integer'Value (Field (Line, 4))),
@@ -367,8 +476,26 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                      Hash      => From_Hex (Field (Line, 8))));
             end if;
          end;
+      end if;
+   end Apply_Line;
+
+   procedure Load (V : in out Vault_Type) is
+      F : File_Type;
+   begin
+      Open (F, In_File, State_Path (V));
+      while not End_Of_File (F) loop
+         Apply_Line (V, Get_Line (F));
       end loop;
       Close (F);
+      --  Replay deltas appended since the last snapshot.
+      if Exists (Journal_Path (V)) then
+         Open (F, In_File, Journal_Path (V));
+         while not End_Of_File (F) loop
+            Apply_Line (V, Get_Line (F));
+            V.Self.Jrnl_Count := V.Self.Jrnl_Count + 1;
+         end loop;
+         Close (F);
+      end if;
    end Load;
 
    procedure Open (V : out Vault_Type; Root : String; Key : Key_256) is
@@ -454,7 +581,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                    Quarantined => False, Size => Natural (Data'Length),
                    User_Meta => To_Unbounded_String (User_Meta)));
          Add_Audit (V, Lock_Created, Name_Digest (Name), At_Time + Retain_For);
-         Save (V);
+         J_Obj (V, Name);
+         Commit_Jrnl (V);
       end;
    end Put_Object;
 
@@ -600,7 +728,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                        At_Time + U.Retain_For);
          end;
          V.Self.Uploads.Delete (Upload_Id);
-         Save (V);
+         J_Obj (V, Name);
+         Commit_Jrnl (V);
       end;
    end Complete_Upload;
 
@@ -725,7 +854,9 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          end if;
          Vec.Append (E);
          V.Self.Versions.Include (Name, Vec);
-         Save (V);
+         J_Vseq (V);
+         J_Ver (V, Name, E);
+         Commit_Jrnl (V);
          return Vid;
       end;
    end Record_Version;
@@ -760,21 +891,28 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          if V.Self.Versions.Contains (Name) then
             Vec := V.Self.Versions.Element (Name);
          end if;
-         Vec.Append (Version_Entry'
-           (Vid     => To_Unbounded_String (Vid),
-            Id      => (others => '0'),
-            Size    => 0,
-            Meta    => Null_Unbounded_String,
-            Deleted => True));
-         V.Self.Versions.Include (Name, Vec);
-         --  The key now reads as deleted; prior version objects are kept by the
-         --  version log (and by GC), so they remain retrievable by version id.
-         if V.Self.Index.Contains (Name) then
-            V.Self.Index.Delete (Name);
-         end if;
-         Add_Audit (V, Delete_Allowed, Name_Digest (Name), CG.Now (V.Self.Clock));
-         Save (V);
-         return Vid;
+         declare
+            E : constant Version_Entry :=
+              (Vid     => To_Unbounded_String (Vid),
+               Id      => (others => '0'),
+               Size    => 0,
+               Meta    => Null_Unbounded_String,
+               Deleted => True);
+         begin
+            Vec.Append (E);
+            V.Self.Versions.Include (Name, Vec);
+            --  The key now reads as deleted; prior version objects are kept by
+            --  the version log (and GC), so they remain retrievable by id.
+            if V.Self.Index.Contains (Name) then
+               V.Self.Index.Delete (Name);
+               J_Del (V, Name);
+            end if;
+            Add_Audit (V, Delete_Allowed, Name_Digest (Name), CG.Now (V.Self.Clock));
+            J_Vseq (V);
+            J_Ver (V, Name, E);
+            Commit_Jrnl (V);
+            return Vid;
+         end;
       end;
    end Delete_Marker;
 
@@ -853,9 +991,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
    end List_Object_Versions;
 
    function Scrub (V : Vault_Type) return Scrub_Report is
-      R       : Scrub_Report;
-      Root    : constant String := To_String (V.Self.Root);
-      Changed : Boolean := False;
+      R    : Scrub_Report;
+      Root : constant String := To_String (V.Self.Root);
    begin
       for Cur in V.Self.Index.Iterate loop
          R.Total := R.Total + 1;
@@ -875,7 +1012,8 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                     (Append (V.Self.Log.Last_Element, CG.Now (V.Self.Clock),
                              Dezhan.Trusted_Core.Audit.Object_Quarantined,
                              Name_Digest (Name), 0));
-                  Changed := True;
+                  J_Obj (V, Name);
+                  Append_Jrnl (V, A_Line (V.Self.Log.Last_Element));
                end if;
             else
                if Res.Shards_Repaired > 0 then
@@ -888,14 +1026,12 @@ package body Dezhan.Vault with SPARK_Mode => Off is
                   --  Redundancy was restored (e.g. shards copied back): lift it.
                   M.Quarantined := False;
                   V.Self.Index.Replace_Element (Cur, M);
-                  Changed := True;
+                  J_Obj (V, Name);
                end if;
             end if;
          end;
       end loop;
-      if Changed then
-         Save (V);
-      end if;
+      Commit_Jrnl (V);   --  one fsync for the whole scrub pass
       return R;
    end Scrub;
 
@@ -986,11 +1122,12 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          if Can_Delete (M.Lock, At_Time, Auth) then
             V.Self.Index.Delete (Name);
             Add_Audit (V, Delete_Allowed, Name_Digest (Name), At_Time);
-            Save (V);
+            J_Del (V, Name);
+            Commit_Jrnl (V);
             return True;
          else
             Add_Audit (V, Delete_Denied, Name_Digest (Name), At_Time);
-            Save (V);
+            Commit_Jrnl (V);   --  flush the buffered denial record
             return False;
          end if;
       end;
