@@ -14,6 +14,10 @@ COPY . .
 # Build the three executables (server, cli, verifier) and every library.
 RUN gprbuild -p -P dezhan.gpr -cargs -O2
 
+# A /data skeleton owned by the runtime's nonroot uid, so the volume is
+# writable when run with plain `docker run` (k8s uses fsGroup instead).
+RUN mkdir -p /data-skel && chown 65532:65532 /data-skel
+
 FROM gcr.io/distroless/cc-debian12:nonroot
 
 # The binaries are dynamically linked against the GNAT Ada runtime, which the
@@ -25,7 +29,9 @@ COPY --from=build /src/server/obj/dezhan_server   /usr/local/bin/dezhan_server
 COPY --from=build /src/cli/obj/dezhan_cli         /usr/local/bin/dezhan_cli
 COPY --from=build /src/verifier/obj/dezhan_verify /usr/local/bin/dezhan_verify
 
-# Vault data lives on a mounted volume. distroless 'nonroot' is uid 65532.
+# Vault data lives on a mounted volume. distroless 'nonroot' is uid 65532;
+# seed /data with that ownership so the server can write its key/journal.
+COPY --from=build --chown=65532:65532 /data-skel /data
 VOLUME ["/data"]
 EXPOSE 8080
 USER nonroot
