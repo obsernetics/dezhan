@@ -66,6 +66,13 @@ system clock cannot expire a lock.
 (Prometheus), `POST /admin/{seal,scrub,checkpoint}`, web UI at `/`. Run
 `sh scripts/smoke.sh` for a boto3 conformance check.
 
+## Observability
+
+`/metrics` is Prometheus format; the operator annotates each vault Service for
+scraping. Apply the ServiceMonitor, Grafana dashboard, alerts, and an OTel
+Collector bridge with `kubectl apply -f operator/config/observability/`. How
+dezhan compares to Longhorn is in [docs/LONGHORN.md](docs/LONGHORN.md).
+
 ## How it works
 
 The retention state machine, clock-integrity guard, append-only audit chain, and

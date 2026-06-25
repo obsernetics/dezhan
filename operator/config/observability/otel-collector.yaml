@@ -1,0 +1,49 @@
+# OpenTelemetry Collector that scrapes dezhan's Prometheus /metrics and forwards
+# them over OTLP to your observability backend (Tempo/Mimir/Grafana Cloud,
+# Honeycomb, Datadog, ...). This is how dezhan aligns with OTel: the vault
+# exposes Prometheus metrics, and the Collector is the bridge to OTLP, so no
+# OTel SDK has to live in the trusted Ada core.
+#
+# Deploy with the OpenTelemetry Operator (kind: OpenTelemetryCollector) or as a
+# standalone Collector using the `config:` block below.
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: dezhan-otel
+  namespace: dezhan-system
+spec:
+  mode: deployment
+  config:
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: dezhan
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: service
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+                  regex: dezhan
+                  action: keep
+                - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+                  target_label: __metrics_path__
+                  regex: (.+)
+    processors:
+      batch: {}
+      resourcedetection:
+        detectors: [env, system]
+    exporters:
+      # Replace with your backend's OTLP endpoint.
+      otlp:
+        endpoint: "otel-backend:4317"
+        tls:
+          insecure: true
+      debug:
+        verbosity: normal
+    service:
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [resourcedetection, batch]
+          exporters: [otlp]

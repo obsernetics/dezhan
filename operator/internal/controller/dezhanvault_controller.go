@@ -130,6 +130,14 @@ func (r *DezhanVaultReconciler) reconcileService(ctx context.Context, v *dezhanv
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: v.Namespace}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		svc.Labels = mergeLabels(svc.Labels, labelsFor(v.Name))
+		// Prometheus scrape annotations so a plain Prometheus (no Operator)
+		// discovers /metrics; the ServiceMonitor in config/observability covers
+		// the Prometheus Operator case.
+		svc.Annotations = mergeLabels(svc.Annotations, map[string]string{
+			"prometheus.io/scrape": "true",
+			"prometheus.io/port":   strconv.Itoa(int(v.Spec.Port)),
+			"prometheus.io/path":   "/metrics",
+		})
 		svc.Spec.Type = v.Spec.ServiceType
 		svc.Spec.Selector = labelsFor(v.Name)
 		// ClusterIP is immutable; request a headless IP only at creation.

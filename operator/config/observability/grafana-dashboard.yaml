@@ -1,0 +1,49 @@
+# Grafana dashboard for dezhan, delivered as a ConfigMap. The Grafana sidecar
+# (grafana.sidecar.dashboards.enabled=true) auto-imports any ConfigMap labelled
+# grafana_dashboard: "1".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dezhan-dashboard
+  namespace: dezhan-system
+  labels:
+    grafana_dashboard: "1"
+data:
+  dezhan.json: |
+    {
+      "title": "dezhan vault",
+      "schemaVersion": 39,
+      "editable": true,
+      "time": {"from": "now-6h", "to": "now"},
+      "templating": {"list": [
+        {"name": "datasource", "type": "datasource", "query": "prometheus"}
+      ]},
+      "panels": [
+        {"id": 1, "type": "stat", "title": "Sealed", "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+         "fieldConfig": {"defaults": {"mappings": [
+           {"type": "value", "options": {"0": {"text": "OK", "color": "green"}, "1": {"text": "SEALED", "color": "red"}}}]}},
+         "targets": [{"expr": "max(dezhan_sealed)"}]},
+        {"id": 2, "type": "stat", "title": "Objects", "gridPos": {"h": 4, "w": 5, "x": 4, "y": 0},
+         "targets": [{"expr": "sum(dezhan_objects)"}]},
+        {"id": 3, "type": "stat", "title": "Quarantined (unrecoverable)", "gridPos": {"h": 4, "w": 5, "x": 9, "y": 0},
+         "fieldConfig": {"defaults": {"thresholds": {"steps": [
+           {"color": "green", "value": null}, {"color": "red", "value": 1}]}}},
+         "targets": [{"expr": "sum(dezhan_quarantined)"}]},
+        {"id": 4, "type": "stat", "title": "Audit entries", "gridPos": {"h": 4, "w": 5, "x": 14, "y": 0},
+         "targets": [{"expr": "sum(dezhan_audit_entries)"}]},
+        {"id": 5, "type": "stat", "title": "Storage", "gridPos": {"h": 4, "w": 5, "x": 19, "y": 0},
+         "fieldConfig": {"defaults": {"unit": "bytes"}},
+         "targets": [{"expr": "sum(dezhan_storage_bytes)"}]},
+        {"id": 6, "type": "timeseries", "title": "Storage bytes", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+         "fieldConfig": {"defaults": {"unit": "bytes"}},
+         "targets": [{"expr": "sum(dezhan_storage_bytes)", "legendFormat": "on disk"}]},
+        {"id": 7, "type": "timeseries", "title": "Scrub: corrupt & shards repaired", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+         "targets": [
+           {"expr": "sum(dezhan_scrub_corrupt)", "legendFormat": "corrupt"},
+           {"expr": "sum(dezhan_scrub_shards_repaired)", "legendFormat": "repaired"}]},
+        {"id": 8, "type": "timeseries", "title": "Retention denials (rate)", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+         "targets": [{"expr": "sum(rate(dezhan_retention_denied_total[5m]))", "legendFormat": "denied/s"}]},
+        {"id": 9, "type": "timeseries", "title": "Scrub passes (rate)", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+         "targets": [{"expr": "sum(rate(dezhan_scrub_runs[15m]))", "legendFormat": "scrubs/s"}]}
+      ]
+    }

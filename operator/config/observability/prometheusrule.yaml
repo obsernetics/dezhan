@@ -1,0 +1,53 @@
+# Alerting rules for dezhan. The signals that matter for an immutable backup
+# vault: is it up, is it sealed (clock anomaly), is data corrupting faster than
+# self-heal can fix it, and are objects becoming unrecoverable (quarantined).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dezhan
+  labels:
+    app.kubernetes.io/name: dezhan
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: dezhan.rules
+      rules:
+        - alert: DezhanVaultDown
+          expr: up{job=~".*dezhan.*"} == 0
+          for: 2m
+          labels: {severity: critical}
+          annotations:
+            summary: "dezhan vault is unreachable"
+            description: "No successful scrape of the dezhan vault for 2 minutes."
+
+        - alert: DezhanVaultSealed
+          expr: dezhan_sealed == 1
+          for: 1m
+          labels: {severity: critical}
+          annotations:
+            summary: "dezhan vault is sealed (clock anomaly)"
+            description: "The clock-integrity guard sealed the vault; writes are blocked until reviewed."
+
+        - alert: DezhanObjectsQuarantined
+          expr: increase(dezhan_quarantined[15m]) > 0
+          for: 0m
+          labels: {severity: critical}
+          annotations:
+            summary: "dezhan quarantined an unrecoverable object"
+            description: "An object lost more shards than erasure coding can rebuild. Restore from another copy."
+
+        - alert: DezhanScrubFindingCorruption
+          expr: dezhan_scrub_corrupt > 0
+          for: 0m
+          labels: {severity: warning}
+          annotations:
+            summary: "dezhan scrub found corruption"
+            description: "The last background scrub found {{ $value }} corrupt object(s); self-heal is rebuilding from parity."
+
+        - alert: DezhanScrubStalled
+          expr: increase(dezhan_scrub_runs[1h]) == 0
+          for: 1h
+          labels: {severity: warning}
+          annotations:
+            summary: "dezhan background scrub has not run"
+            description: "No scrub pass completed in the last hour; data is not being verified."

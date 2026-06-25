@@ -1,0 +1,23 @@
+# Prometheus Operator ServiceMonitor: scrape every dezhan vault Service on its
+# S3 port at /metrics. Apply if you run the Prometheus Operator (kube-prometheus
+# stack). For a plain Prometheus, the operator also sets prometheus.io/scrape
+# annotations on the Service.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dezhan
+  labels:
+    app.kubernetes.io/name: dezhan
+    release: kube-prometheus-stack   # match your Prometheus serviceMonitorSelector
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dezhan
+      app.kubernetes.io/managed-by: dezhan-operator
+  endpoints:
+    - port: s3
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
