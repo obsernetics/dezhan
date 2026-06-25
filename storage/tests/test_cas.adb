@@ -158,17 +158,34 @@ begin
          Check (Raised, "missing or tampered auth tag is detected (Auth_Failed)");
       end;
 
-      --  Erasure coding: losing up to M=2 shards of a chunk is recoverable.
-      Check (Delete_N_Shards (Root, 2) = 2, "removed 2 of 6 shards from a chunk");
-      Check (Verify (Root, Id),
-             "erasure recovers: object intact after losing 2 shards");
-      Check (Equal (Get (Root, Key, Id), Data),
-             "object reassembles from parity after losing 2 shards");
+      --  Erasure coding: losing up to M=2 shards of a chunk is recoverable,
+      --  and losing more is detected. Delete_N_Shards targets the first chunk
+      --  directory it finds, so this runs in a dedicated root holding only this
+      --  object; otherwise the chunk picked could belong to another object
+      --  (e.g. the tamper object above) and the result would depend on
+      --  filesystem directory-iteration order, which is not portable.
+      declare
+         R_Loss : constant String := "/tmp/dezhan_cas_loss_test";
+      begin
+         if Exists (R_Loss) then
+            Delete_Tree (R_Loss);
+         end if;
+         Initialize (R_Loss);
+         declare
+            Id_L : constant Object_Id := Put (R_Loss, Key, Data);
+         begin
+            Check (Delete_N_Shards (R_Loss, 2) = 2, "removed 2 of 6 shards from a chunk");
+            Check (Verify (R_Loss, Id_L),
+                   "erasure recovers: object intact after losing 2 shards");
+            Check (Equal (Get (R_Loss, Key, Id_L), Data),
+                   "object reassembles from parity after losing 2 shards");
 
-      --  Losing more than M shards of a chunk is unrecoverable and detected.
-      Check (Delete_N_Shards (Root, 2) = 2, "removed 2 more shards (4 of 6 gone)");
-      Check (not Verify (Root, Id),
-             "verify detects unrecoverable loss (> M shards)");
+            --  Losing more than M shards of a chunk is unrecoverable.
+            Check (Delete_N_Shards (R_Loss, 2) = 2, "removed 2 more shards (4 of 6 gone)");
+            Check (not Verify (R_Loss, Id_L),
+                   "verify detects unrecoverable loss (> M shards)");
+         end;
+      end;
    end;
 
    --  Manifest erasure protection: the manifest is itself sharded, so losing
