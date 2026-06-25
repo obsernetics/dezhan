@@ -161,8 +161,9 @@ demo key is used at rest).
   (approvers pre-authorize a resource via POST /approve from separate sessions;
   approvals expire after DEZHAN_APPROVAL_TTL and are consumed on use). Staged
   approval covers single-object/bucket DELETE; batch delete still requires
-  synchronous header approvals. API tokens and service accounts beyond the
-  credential file are future.
+  synchronous header approvals. API tokens / service accounts: a DEZHAN_TOKENS
+  file maps bearer tokens to principals (Authorization: Bearer), inheriting the
+  principal's RBAC policy.
 - Observability: structured (key=value) request logs, a `/healthz` endpoint, and
   Prometheus `/metrics` covering object count, storage bytes on disk, quarantined
   objects, audit length, scrub status (runs/corrupt/shards repaired), retention

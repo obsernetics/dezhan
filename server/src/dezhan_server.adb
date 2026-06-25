@@ -280,6 +280,11 @@ procedure Dezhan_Server is
    Bucket_Roles : Role_Maps.Map;   --  akid & LF & bucket -> per-bucket override
    Admin_Token  : constant String := Env ("DEZHAN_ADMIN_TOKEN", "");
 
+   --  API tokens / service accounts: a bearer token maps to a principal (access
+   --  key id) and inherits that principal's RBAC policy, so a long-lived token
+   --  is a service account. Lines in the DEZHAN_TOKENS file are "token akid".
+   Tokens : Cred_Maps.Map;   --  token -> access key id
+
    --  Map a perm word to a Role; unknown defaults to full access.
    function To_Role (S : String) return Role is
      (if S = "ro" then Read_Only
@@ -516,6 +521,29 @@ procedure Dezhan_Server is
    exception
       when others => null;  --  no/unreadable file: rely on the seeded demo cred
    end Load_Credentials;
+
+   --  Token file lines: "token accesskey". The token authenticates as that
+   --  principal (bearer), inheriting its RBAC policy.
+   procedure Load_Tokens (Path : String) is
+      F : File_Type;
+   begin
+      Open (F, In_File, Path);
+      while not End_Of_File (F) loop
+         declare
+            Line : constant String := Get_Line (F);
+            Sp   : constant Natural := Index (Line, " ");
+         begin
+            if Sp > 0 then
+               Tokens.Include
+                 (Trim (Line (Line'First .. Sp - 1), Both),
+                  Trim (Line (Sp + 1 .. Line'Last), Both));
+            end if;
+         end;
+      end loop;
+      Close (F);
+   exception
+      when others => null;  --  no/unreadable token file: tokens disabled
+   end Load_Tokens;
 
    V : Vault_Type;
 
@@ -889,6 +917,28 @@ procedure Dezhan_Server is
       Princ_Role := Read_Write;   --  default for anonymous / unset (overwritten on Valid)
       Princ_Key  := Null_Unbounded_String;
       if A /= "" then
+         --  Bearer token (API token / service account): resolve to a principal.
+         if A'Length > 7 and then A (A'First .. A'First + 6) = "Bearer " then
+            declare
+               Tok : constant String := Trim (A (A'First + 7 .. A'Last), Both);
+            begin
+               if Tokens.Contains (Tok)
+                 and then Credentials.Contains (Tokens.Element (Tok))
+               then
+                  declare
+                     AKID : constant String := Tokens.Element (Tok);
+                  begin
+                     Princ_Role :=
+                       (if Roles.Contains (AKID) then Roles.Element (AKID)
+                        else Read_Write);
+                     Princ_Key := To_Unbounded_String (AKID);
+                     return Valid;
+                  end;
+               else
+                  return Invalid;
+               end if;
+            end;
+         end if;
          if Index (A, "AWS4-HMAC-SHA256") = 0 then
             return Invalid;
          end if;
@@ -2118,6 +2168,7 @@ begin
    Credentials.Include (Access_Key, Secret_Key);   --  seed the demo account
    Roles.Include (Access_Key, Read_Write);
    Load_Credentials (Env ("DEZHAN_CREDENTIALS", Root & "/credentials"));
+   Load_Tokens (Env ("DEZHAN_TOKENS", Root & "/tokens"));
    Initialize;
    Create_Socket (Server);
    Set_Socket_Option (Server, Socket_Level, (Reuse_Address, True));
