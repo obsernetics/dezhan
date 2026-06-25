@@ -28,6 +28,14 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
+        - name: csi-snapshotter
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v8.0.1
+          args:
+            - --csi-address=/csi/csi.sock
+            - --leader-election
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
         - name: dezhan-csi
           image: ghcr.io/obsernetics/dezhan-csi:latest
           args:

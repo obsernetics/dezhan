@@ -3,9 +3,11 @@ package driver
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/klog/v2"
 )
 
@@ -37,10 +39,19 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		return nil, errf(codes.InvalidArgument, "%v", err)
 	}
 	bucket := bucketName(req.GetName())
-	if err := conn.createBucket(ctx, bucket); err != nil {
+
+	// Restore from a snapshot if requested: copy the snapshot bucket into the
+	// new volume bucket. Otherwise just create an empty bucket.
+	if src := req.GetVolumeContentSource().GetSnapshot(); src != nil {
+		if _, err := conn.copyAll(ctx, src.GetSnapshotId(), bucket); err != nil {
+			return nil, errf(codes.Internal, "restore from snapshot %s: %v", src.GetSnapshotId(), err)
+		}
+		klog.InfoS("provisioned volume from snapshot", "bucket", bucket, "snapshot", src.GetSnapshotId())
+	} else if err := conn.createBucket(ctx, bucket); err != nil {
 		return nil, errf(codes.Internal, "%v", err)
+	} else {
+		klog.InfoS("provisioned volume", "bucket", bucket, "endpoint", conn.Endpoint)
 	}
-	klog.InfoS("provisioned volume", "bucket", bucket, "endpoint", conn.Endpoint)
 
 	cap := req.GetCapacityRange().GetRequiredBytes() // advisory only for an object store
 
@@ -50,6 +61,7 @@ func (s *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	return &csi.CreateVolumeResponse{Volume: &csi.Volume{
 		VolumeId:      bucket,
 		CapacityBytes: cap,
+		ContentSource: req.GetVolumeContentSource(),
 		VolumeContext: map[string]string{
 			"bucket":   bucket,
 			"endpoint": conn.Endpoint,
@@ -75,6 +87,7 @@ func (s *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 func (s *controllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
 	caps := []csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
 	}
 	out := make([]*csi.ControllerServiceCapability, 0, len(caps))
 	for _, c := range caps {
@@ -83,6 +96,52 @@ func (s *controllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.C
 		})
 	}
 	return &csi.ControllerGetCapabilitiesResponse{Capabilities: out}, nil
+}
+
+// snapshotBucket derives the snapshot bucket name from the CSI snapshot name.
+func snapshotBucket(reqName string) string {
+	b := "snap-" + strings.ToLower(strings.TrimPrefix(reqName, "snapshot-"))
+	if len(b) > 63 {
+		b = b[:63]
+	}
+	return b
+}
+
+func (s *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+	if req.GetName() == "" || req.GetSourceVolumeId() == "" {
+		return nil, errf(codes.InvalidArgument, "snapshot name and source volume id are required")
+	}
+	conn, err := connFrom(req.GetSecrets(), req.GetParameters())
+	if err != nil {
+		return nil, errf(codes.InvalidArgument, "%v", err)
+	}
+	snap := snapshotBucket(req.GetName())
+	size, err := conn.copyAll(ctx, req.GetSourceVolumeId(), snap)
+	if err != nil {
+		return nil, errf(codes.Internal, "%v", err)
+	}
+	klog.InfoS("created snapshot", "snapshot", snap, "source", req.GetSourceVolumeId(), "bytes", size)
+	return &csi.CreateSnapshotResponse{Snapshot: &csi.Snapshot{
+		SnapshotId:     snap,
+		SourceVolumeId: req.GetSourceVolumeId(),
+		SizeBytes:      size,
+		CreationTime:   timestamppb.New(time.Now()),
+		ReadyToUse:     true,
+	}}, nil
+}
+
+func (s *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+	if req.GetSnapshotId() == "" {
+		return nil, errf(codes.InvalidArgument, "snapshot id is required")
+	}
+	conn, err := connFrom(req.GetSecrets(), nil)
+	if err != nil {
+		return nil, errf(codes.InvalidArgument, "%v", err)
+	}
+	if err := conn.deleteBucket(ctx, req.GetSnapshotId()); err != nil {
+		return nil, errf(codes.Internal, "%v", err)
+	}
+	return &csi.DeleteSnapshotResponse{}, nil
 }
 
 func (s *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {

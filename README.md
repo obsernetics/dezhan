@@ -168,6 +168,10 @@ the dezhan S3 API; the node plugin's `NodePublishVolume` mounts it with
 `mount-s3`. Credentials come from the StorageClass-referenced Secret, never the
 image.
 
+Volume snapshots are supported (`deploy/csi/volumesnapshotclass.yaml`): a
+`VolumeSnapshot` server-side-copies the bucket into an immutable snapshot
+bucket, and a PVC with that snapshot as its `dataSource` restores it.
+
 ## Observability
 
 `/metrics` is Prometheus format; the operator annotates each vault Service for

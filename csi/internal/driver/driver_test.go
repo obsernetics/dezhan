@@ -18,6 +18,18 @@ func TestBucketName(t *testing.T) {
 	}
 }
 
+func TestSnapshotBucket(t *testing.T) {
+	if got := snapshotBucket("snapshot-abc"); got != "snap-abc" {
+		t.Errorf("snapshotBucket(snapshot-abc) = %q, want snap-abc", got)
+	}
+	if got := snapshotBucket("MyShot"); got != "snap-myshot" {
+		t.Errorf("snapshotBucket(MyShot) = %q", got)
+	}
+	if got := snapshotBucket(strings.Repeat("z", 100)); len(got) > 63 {
+		t.Errorf("snapshotBucket too long: %d", len(got))
+	}
+}
+
 func TestConnFrom(t *testing.T) {
 	// secret value wins over param; region falls back to the param.
 	c, err := connFrom(

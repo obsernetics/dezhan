@@ -1,0 +1,15 @@
+# Snapshot class for dezhan-backed volumes. A VolumeSnapshot copies the source
+# bucket into an immutable snapshot bucket (server-side, deduplicated). Restore
+# by creating a PVC with this snapshot as its dataSource.
+#
+# Requires the VolumeSnapshot CRDs and snapshot-controller from the external
+# snapshotter project to be installed in the cluster.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: dezhan
+driver: dezhan.csi.obsernetics.io
+deletionPolicy: Delete
+parameters:
+  csi.storage.k8s.io/snapshotter-secret-name: dezhan-csi-credentials
+  csi.storage.k8s.io/snapshotter-secret-namespace: kube-system
