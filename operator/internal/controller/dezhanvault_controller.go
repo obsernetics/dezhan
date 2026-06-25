@@ -4,14 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -20,11 +23,19 @@ import (
 	dezhanv1alpha1 "github.com/obsernetics/dezhan/operator/api/v1alpha1"
 )
 
+const (
+	containerName = "dezhan"
+	dataVolume    = "data"
+	fieldOwnerUID = 65532 // distroless 'nonroot'
+	requeueWait   = 20 * time.Second
+)
+
 // DezhanVaultReconciler reconciles a DezhanVault into a headless Service and a
 // single-replica StatefulSet backed by a persistent volume.
 type DezhanVaultReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=dezhan.obsernetics.io,resources=dezhanvaults,verbs=get;list;watch;create;update;patch;delete
@@ -32,6 +43,7 @@ type DezhanVaultReconciler struct {
 // +kubebuilder:rbac:groups=dezhan.obsernetics.io,resources=dezhanvaults/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *DezhanVaultReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
@@ -39,49 +51,46 @@ func (r *DezhanVaultReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	var vault dezhanv1alpha1.DezhanVault
 	if err := r.Get(ctx, req.NamespacedName, &vault); err != nil {
 		// Ignore not-found: owned objects are garbage-collected via ownerRefs.
+		// PersistentVolumeClaims created by the StatefulSet are intentionally
+		// retained so vault data survives a CR deletion.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !vault.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
 	}
 	applyDefaults(&vault)
 
 	if err := r.reconcileService(ctx, &vault); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconcile service: %w", err)
+		return r.fail(ctx, &vault, "ServiceError", err)
 	}
 	if err := r.reconcileStatefulSet(ctx, &vault); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconcile statefulset: %w", err)
+		return r.fail(ctx, &vault, "StatefulSetError", err)
 	}
 
-	// Read back StatefulSet readiness for status.
-	var live appsv1.StatefulSet
-	if err := r.Get(ctx, types.NamespacedName{Name: vault.Name, Namespace: vault.Namespace}, &live); err != nil {
+	var sts appsv1.StatefulSet
+	if err := r.Get(ctx, req.NamespacedName, &sts); err != nil {
 		return ctrl.Result{}, err
 	}
-	ready := live.Status.ReadyReplicas >= 1
+	ready := sts.Status.ReadyReplicas >= 1
 
-	vault.Status.ObservedGeneration = vault.Generation
-	vault.Status.Ready = ready
-	vault.Status.Endpoint = fmt.Sprintf("%s.%s.svc:%d", vault.Name, vault.Namespace, vault.Spec.Port)
-	cond := metav1.Condition{
-		Type:               "Available",
-		Status:             metav1.ConditionFalse,
-		Reason:             "StatefulSetNotReady",
-		Message:            "vault pod is not ready",
-		ObservedGeneration: vault.Generation,
-	}
-	if ready {
-		cond.Status = metav1.ConditionTrue
-		cond.Reason = "StatefulSetReady"
-		cond.Message = "vault pod is ready"
-	}
-	setCondition(&vault.Status.Conditions, cond)
-
-	if err := r.Status().Update(ctx, &vault); err != nil {
+	if err := r.updateStatus(ctx, &vault, ready); err != nil {
 		return ctrl.Result{}, err
 	}
 	if !ready {
-		l.Info("vault not ready yet, requeueing")
-		return ctrl.Result{Requeue: true}, nil
+		l.V(1).Info("vault not ready, requeueing", "name", vault.Name)
+		return ctrl.Result{RequeueAfter: requeueWait}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// fail records an event, marks the vault unavailable, and returns the error so
+// the work queue retries with backoff.
+func (r *DezhanVaultReconciler) fail(ctx context.Context, v *dezhanv1alpha1.DezhanVault, reason string, err error) (ctrl.Result, error) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(v, corev1.EventTypeWarning, reason, "%v", err)
+	}
+	_ = r.updateStatus(ctx, v, false)
+	return ctrl.Result{}, err
 }
 
 func applyDefaults(v *dezhanv1alpha1.DezhanVault) {
@@ -107,13 +116,23 @@ func labelsFor(name string) map[string]string {
 	}
 }
 
+func mergeLabels(dst map[string]string, src map[string]string) map[string]string {
+	if dst == nil {
+		dst = map[string]string{}
+	}
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
 func (r *DezhanVaultReconciler) reconcileService(ctx context.Context, v *dezhanv1alpha1.DezhanVault) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: v.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
-		svc.Labels = labelsFor(v.Name)
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		svc.Labels = mergeLabels(svc.Labels, labelsFor(v.Name))
 		svc.Spec.Type = v.Spec.ServiceType
 		svc.Spec.Selector = labelsFor(v.Name)
-		// ClusterIP is immutable; only request a headless IP at creation time.
+		// ClusterIP is immutable; request a headless IP only at creation.
 		if svc.CreationTimestamp.IsZero() && v.Spec.ServiceType == corev1.ServiceTypeClusterIP {
 			svc.Spec.ClusterIP = corev1.ClusterIPNone
 		}
@@ -125,23 +144,26 @@ func (r *DezhanVaultReconciler) reconcileService(ctx context.Context, v *dezhanv
 		}}
 		return controllerutil.SetControllerReference(v, svc, r.Scheme)
 	})
+	if err == nil && op != controllerutil.OperationResultNone && r.Recorder != nil {
+		r.Recorder.Eventf(v, corev1.EventTypeNormal, "Reconciled", "service %s", op)
+	}
 	return err
 }
 
 func (r *DezhanVaultReconciler) reconcileStatefulSet(ctx context.Context, v *dezhanv1alpha1.DezhanVault) error {
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Namespace: v.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		replicas := int32(1)
-		sts.Labels = labelsFor(v.Name)
+		sts.Labels = mergeLabels(sts.Labels, labelsFor(v.Name))
 		sts.Spec.Replicas = &replicas
-		sts.Spec.ServiceName = v.Name
-		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labelsFor(v.Name)}
-		sts.Spec.Template.ObjectMeta.Labels = labelsFor(v.Name)
-		sts.Spec.Template.Spec = r.podSpec(v)
-		// VolumeClaimTemplates are immutable after creation; set once.
+
+		// Selector, ServiceName, and VolumeClaimTemplates are immutable after
+		// creation; set them once. Mutating them later is rejected by the API.
 		if sts.CreationTimestamp.IsZero() {
+			sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labelsFor(v.Name)}
+			sts.Spec.ServiceName = v.Name
 			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{{
-				ObjectMeta: metav1.ObjectMeta{Name: "data"},
+				ObjectMeta: metav1.ObjectMeta{Name: dataVolume},
 				Spec: corev1.PersistentVolumeClaimSpec{
 					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 					StorageClassName: v.Spec.StorageClassName,
@@ -151,12 +173,58 @@ func (r *DezhanVaultReconciler) reconcileStatefulSet(ctx context.Context, v *dez
 				},
 			}}
 		}
+
+		sts.Spec.Template.Labels = mergeLabels(sts.Spec.Template.Labels, labelsFor(v.Name))
+		applyPodSpec(&sts.Spec.Template.Spec, v)
 		return controllerutil.SetControllerReference(v, sts, r.Scheme)
 	})
+	if err == nil && op != controllerutil.OperationResultNone && r.Recorder != nil {
+		r.Recorder.Eventf(v, corev1.EventTypeNormal, "Reconciled", "statefulset %s", op)
+	}
 	return err
 }
 
-func (r *DezhanVaultReconciler) podSpec(v *dezhanv1alpha1.DezhanVault) corev1.PodSpec {
+// applyPodSpec reconciles only the fields the operator owns, in place, so the
+// API server's pod-template defaults (imagePullPolicy, dnsPolicy, ...) are left
+// untouched. Replacing the whole PodSpec each pass would fight those defaults
+// and spin the controller in a hot update loop.
+func applyPodSpec(spec *corev1.PodSpec, v *dezhanv1alpha1.DezhanVault) {
+	spec.SecurityContext = &corev1.PodSecurityContext{
+		RunAsNonRoot: ptr(true),
+		FSGroup:      ptr[int64](fieldOwnerUID),
+	}
+
+	var c *corev1.Container
+	for i := range spec.Containers {
+		if spec.Containers[i].Name == containerName {
+			c = &spec.Containers[i]
+			break
+		}
+	}
+	if c == nil {
+		spec.Containers = append(spec.Containers, corev1.Container{Name: containerName})
+		c = &spec.Containers[len(spec.Containers)-1]
+	}
+
+	c.Image = v.Spec.Image
+	c.Args = []string{strconv.Itoa(int(v.Spec.Port)), "/" + dataVolume}
+	c.Env = vaultEnv(v)
+	c.EnvFrom = vaultEnvFrom(v)
+	c.Ports = []corev1.ContainerPort{{Name: "s3", ContainerPort: v.Spec.Port, Protocol: corev1.ProtocolTCP}}
+	c.VolumeMounts = []corev1.VolumeMount{{Name: dataVolume, MountPath: "/" + dataVolume}}
+	c.Resources = v.Spec.Resources
+	c.ReadinessProbe = healthProbe(v.Spec.Port, 3)
+	c.LivenessProbe = healthProbe(v.Spec.Port, 10)
+	c.SecurityContext = &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr(false),
+		ReadOnlyRootFilesystem:   ptr(true),
+		RunAsNonRoot:             ptr(true),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
+func vaultEnv(v *dezhanv1alpha1.DezhanVault) []corev1.EnvVar {
 	env := []corev1.EnvVar{}
 	if v.Spec.RequireAuth {
 		env = append(env, corev1.EnvVar{Name: "DEZHAN_REQUIRE_AUTH", Value: "1"})
@@ -164,70 +232,67 @@ func (r *DezhanVaultReconciler) podSpec(v *dezhanv1alpha1.DezhanVault) corev1.Po
 	if v.Spec.DeleteQuorum > 0 {
 		env = append(env, corev1.EnvVar{Name: "DEZHAN_DELETE_QUORUM", Value: strconv.Itoa(int(v.Spec.DeleteQuorum))})
 	}
-	envFrom := []corev1.EnvFromSource{}
-	if v.Spec.SecretName != "" {
-		envFrom = append(envFrom, corev1.EnvFromSource{
-			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: v.Spec.SecretName}},
-		})
+	return env
+}
+
+func vaultEnvFrom(v *dezhanv1alpha1.DezhanVault) []corev1.EnvFromSource {
+	if v.Spec.SecretName == "" {
+		return nil
 	}
-	probe := &corev1.Probe{
+	return []corev1.EnvFromSource{{
+		SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: v.Spec.SecretName}},
+	}}
+}
+
+func healthProbe(port int32, initialDelay int32) *corev1.Probe {
+	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt32(v.Spec.Port)},
+			HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt32(port)},
 		},
-		InitialDelaySeconds: 3,
+		InitialDelaySeconds: initialDelay,
 		PeriodSeconds:       10,
-	}
-	return corev1.PodSpec{
-		SecurityContext: &corev1.PodSecurityContext{
-			RunAsNonRoot: ptrBool(true),
-			FSGroup:      ptrInt64(65532),
-		},
-		Containers: []corev1.Container{{
-			Name:    "dezhan",
-			Image:   v.Spec.Image,
-			Args:    []string{strconv.Itoa(int(v.Spec.Port)), "/data"},
-			Env:     env,
-			EnvFrom: envFrom,
-			Ports: []corev1.ContainerPort{{
-				Name:          "s3",
-				ContainerPort: v.Spec.Port,
-				Protocol:      corev1.ProtocolTCP,
-			}},
-			VolumeMounts:   []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
-			ReadinessProbe: probe,
-			LivenessProbe:  probe,
-			Resources:      v.Spec.Resources,
-			SecurityContext: &corev1.SecurityContext{
-				AllowPrivilegeEscalation: ptrBool(false),
-				ReadOnlyRootFilesystem:   ptrBool(true),
-				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-			},
-		}},
+		TimeoutSeconds:      3,
+		FailureThreshold:    3,
 	}
 }
 
-func setCondition(conds *[]metav1.Condition, c metav1.Condition) {
-	for i := range *conds {
-		if (*conds)[i].Type == c.Type {
-			if (*conds)[i].Status != c.Status {
-				(*conds)[i].LastTransitionTime = metav1.Now()
-			}
-			(*conds)[i].Status = c.Status
-			(*conds)[i].Reason = c.Reason
-			(*conds)[i].Message = c.Message
-			(*conds)[i].ObservedGeneration = c.ObservedGeneration
-			return
-		}
+// updateStatus writes status with a fresh read to avoid stale-resourceVersion
+// conflicts, and only patches when something actually changed.
+func (r *DezhanVaultReconciler) updateStatus(ctx context.Context, v *dezhanv1alpha1.DezhanVault, ready bool) error {
+	var cur dezhanv1alpha1.DezhanVault
+	if err := r.Get(ctx, types.NamespacedName{Name: v.Name, Namespace: v.Namespace}, &cur); err != nil {
+		return client.IgnoreNotFound(err)
 	}
-	c.LastTransitionTime = metav1.Now()
-	*conds = append(*conds, c)
+	patch := client.MergeFrom(cur.DeepCopy())
+
+	cur.Status.ObservedGeneration = cur.Generation
+	cur.Status.Ready = ready
+	cur.Status.Endpoint = fmt.Sprintf("%s.%s.svc:%d", v.Name, v.Namespace, v.Spec.Port)
+	cond := metav1.Condition{
+		Type:               "Available",
+		ObservedGeneration: cur.Generation,
+		Status:             metav1.ConditionFalse,
+		Reason:             "StatefulSetNotReady",
+		Message:            "vault pod is not ready",
+	}
+	if ready {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "StatefulSetReady"
+		cond.Message = "vault pod is ready"
+	}
+	meta.SetStatusCondition(&cur.Status.Conditions, cond)
+	return r.Status().Patch(ctx, &cur, patch)
 }
 
-func ptrBool(b bool) *bool    { return &b }
-func ptrInt64(i int64) *int64 { return &i }
+func ptr[T any](x T) *T { return &x }
+
+// requeueWait is also used as the default resync backstop for readiness.
 
 // SetupWithManager wires the controller and the objects it owns.
 func (r *DezhanVaultReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("dezhan-operator")
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dezhanv1alpha1.DezhanVault{}).
 		Owns(&appsv1.StatefulSet{}).

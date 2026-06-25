@@ -1,0 +1,42 @@
+name: operator
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "operator/**", ".github/workflows/operator.yml" ]
+  pull_request:
+    paths: [ "operator/**", ".github/workflows/operator.yml" ]
+
+# Build, vet, and run the controller integration test against a real
+# kube-apiserver + etcd via envtest. The test asserts the controller reconciles
+# a DezhanVault into a Service, StatefulSet, and PVC, and does not churn on a
+# steady-state reconcile.
+jobs:
+  test:
+    name: build / vet / envtest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: operator
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: operator/go.sum
+
+      - name: gofmt
+        run: test -z "$(gofmt -l api cmd internal)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Integration test (envtest)
+        run: |
+          KUBEBUILDER_ASSETS=$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.19 use 1.30.0 -p path)
+          export KUBEBUILDER_ASSETS
+          go test ./... -count=1
