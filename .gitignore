@@ -15,6 +15,7 @@ operator/cover.out
 
 # Local dev tooling and build VM (not part of the published software)
 vm/
+.vscode/
 Makefile
 CLAUDE.md
 *.qcow2
