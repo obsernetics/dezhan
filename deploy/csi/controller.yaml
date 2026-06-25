@@ -1,0 +1,47 @@
+# CSI controller: the external-provisioner sidecar turns PVCs into CreateVolume
+# calls, and the dezhan-csi container creates/deletes dezhan buckets.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dezhan-csi-controller
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: dezhan-csi-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dezhan-csi-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dezhan-csi-controller
+    spec:
+      serviceAccountName: dezhan-csi-controller
+      containers:
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v5.0.1
+          args:
+            - --csi-address=/csi/csi.sock
+            - --leader-election
+            - --extra-create-metadata
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: dezhan-csi
+          image: ghcr.io/obsernetics/dezhan-csi:latest
+          args:
+            - --endpoint=unix:///csi/csi.sock
+            - --mode=controller
+            - --v=2
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: socket-dir
+          emptyDir: {}

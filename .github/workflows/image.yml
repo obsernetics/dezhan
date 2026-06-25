@@ -23,6 +23,9 @@ jobs:
           - image: dezhan-operator
             context: operator
             dockerfile: operator/Dockerfile
+          - image: dezhan-csi
+            context: csi
+            dockerfile: csi/Dockerfile
     steps:
       - uses: actions/checkout@v4
 

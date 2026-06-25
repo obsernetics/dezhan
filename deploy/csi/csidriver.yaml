@@ -1,0 +1,12 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: dezhan.csi.obsernetics.io
+spec:
+  # The volume is a FUSE mount of a bucket; no external attach step.
+  attachRequired: false
+  # Pass pod info so the node plugin can log/trace per-workload mounts.
+  podInfoOnMount: true
+  volumeLifecycleModes:
+    - Persistent
+  fsGroupPolicy: File

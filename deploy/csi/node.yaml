@@ -1,0 +1,70 @@
+# CSI node plugin: registers with kubelet and mounts dezhan buckets via
+# mountpoint-s3. Runs privileged because it creates FUSE mounts that propagate
+# into pod containers.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dezhan-csi-node
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: dezhan-csi-node
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dezhan-csi-node
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dezhan-csi-node
+    spec:
+      serviceAccountName: dezhan-csi-node
+      hostNetwork: false
+      containers:
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.11.1
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/dezhan.csi.obsernetics.io/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        - name: dezhan-csi
+          image: ghcr.io/obsernetics/dezhan-csi:latest
+          args:
+            - --endpoint=unix:///csi/csi.sock
+            - --mode=node
+            - --node-id=$(NODE_ID)
+            - --v=2
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: pods-mount-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+            - name: fuse
+              mountPath: /dev/fuse
+      volumes:
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: DirectoryOrCreate
+        - name: socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/dezhan.csi.obsernetics.io
+            type: DirectoryOrCreate
+        - name: pods-mount-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: fuse
+          hostPath:
+            path: /dev/fuse

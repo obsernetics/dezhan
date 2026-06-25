@@ -1,0 +1,20 @@
+# A StorageClass that provisions a dezhan bucket per PVC and mounts it via
+# mountpoint-s3. Best for write-once/append and archival workloads (matches
+# dezhan's WORM model); not for random-write volumes such as databases.
+#
+# Point `endpoint` at your vault Service and reference a Secret holding the S3
+# credentials (see secret-example.yaml).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: dezhan
+provisioner: dezhan.csi.obsernetics.io
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  endpoint: "http://dezhan.default.svc:8080"
+  region: "us-east-1"
+  csi.storage.k8s.io/provisioner-secret-name: dezhan-csi-credentials
+  csi.storage.k8s.io/provisioner-secret-namespace: kube-system
+  csi.storage.k8s.io/node-publish-secret-name: dezhan-csi-credentials
+  csi.storage.k8s.io/node-publish-secret-namespace: kube-system

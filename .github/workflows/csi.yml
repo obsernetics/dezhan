@@ -1,0 +1,30 @@
+name: csi
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "csi/**", ".github/workflows/csi.yml" ]
+  pull_request:
+    paths: [ "csi/**", ".github/workflows/csi.yml" ]
+
+jobs:
+  test:
+    name: build / vet / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: csi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: csi/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./... -count=1

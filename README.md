@@ -71,6 +71,16 @@ system clock cannot expire a lock.
 (Prometheus), `POST /admin/{seal,scrub,checkpoint}`, web UI at `/`. Run
 `sh scripts/smoke.sh` for a boto3 conformance check.
 
+## Use as a Kubernetes volume
+
+A CSI driver turns a vault into a StorageClass: each PVC becomes a bucket,
+mounted via mountpoint-s3. Best for write-once/append/archival workloads (it
+matches WORM), not random-write volumes. See [csi/README.md](csi/README.md).
+
+```sh
+kubectl apply -f deploy/csi/
+```
+
 ## Observability
 
 `/metrics` is Prometheus format; the operator annotates each vault Service for
