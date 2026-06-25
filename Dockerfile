@@ -12,7 +12,10 @@ WORKDIR /src
 COPY . .
 
 # Build the three executables (server, cli, verifier) and every library.
-RUN gprbuild -p -P dezhan.gpr -cargs -O2
+# Link the GNAT Ada runtime statically (-largs -static): the distroless runtime
+# has no libgnat/libgnarl shared objects, so a dynamically linked binary fails
+# with "libgnarl-*.so: cannot open shared object file".
+RUN gprbuild -p -P dezhan.gpr -cargs -O2 -largs -static
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 
