@@ -1,7 +1,7 @@
 --  Retention State Machine: first unit of the SPARK trusted core.
 --
 --  Enforces, by formal proof, the spec's mandatory retention invariants
---  (docs/SPEC.md → Trusted Core → Retention State Machine):
+--  (the spec → Trusted Core → Retention State Machine):
 --
 --    * A retained object can never be deleted before expiry.
 --    * A retention period can never be shortened (it may be extended).

@@ -2,7 +2,7 @@
 
 Date: 2026-06-22
 Status: Implemented and verified
-Spec source of truth: `docs/SPEC.md` (Clock Integrity Guard; Clock Manipulation).
+Design scope: Clock Integrity Guard; Clock Manipulation. (The standalone docs/SPEC.md has been retired; the implementation and these design docs are the reference.)
 
 ## Goal
 

@@ -2,7 +2,7 @@
 
 Date: 2026-06-23
 Status: First slice implemented
-Spec source of truth: `docs/SPEC.md` (Storage Engine).
+Design scope: Storage Engine. (The standalone docs/SPEC.md has been retired; the implementation and these design docs are the reference.)
 
 ## Goal
 

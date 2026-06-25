@@ -2,8 +2,9 @@
 
 Date: 2026-06-23
 Status: Implemented (cipher proved for run-time safety, validated by RFC vector)
-Spec source of truth: `docs/SPEC.md` (Storage Engine: encryption at source; MVP:
-encryption at rest).
+Design scope: Storage Engine (encryption at source; MVP: encryption at rest).
+(The standalone docs/SPEC.md has been retired; the implementation and these
+design docs are the reference.)
 
 ## Cipher: `Dezhan.Trusted_Core.Cipher`
 

@@ -3,7 +3,7 @@
 [![ci](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml/badge.svg)](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml)
 [![operator](https://github.com/obsernetics/dezhan/actions/workflows/operator.yml/badge.svg)](https://github.com/obsernetics/dezhan/actions/workflows/operator.yml)
 [![csi](https://github.com/obsernetics/dezhan/actions/workflows/csi.yml/badge.svg)](https://github.com/obsernetics/dezhan/actions/workflows/csi.yml)
-[![SPARK proof: 325 checks, 0 unproved](https://img.shields.io/badge/SPARK%20proof-325%20checks%2C%200%20unproved-brightgreen)](docs/SPEC.md)
+[![SPARK proof: 325 checks, 0 unproved](https://img.shields.io/badge/SPARK%20proof-325%20checks%2C%200%20unproved-brightgreen)](scripts/prove.sh)
 [![trusted-core coverage 95%](https://img.shields.io/badge/trusted--core%20coverage-95%25-brightgreen)](scripts/coverage.sh)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](#)
 
@@ -212,8 +212,8 @@ Collector bridge with `kubectl apply -f operator/config/observability/`.
 The retention state machine, clock-integrity guard, append-only audit chain, and
 erasure coding are written in SPARK and machine-checked by `gnatprove` (325
 checks, 0 unproved); the cryptography (SHA-256/512, ChaCha20, HMAC, Ed25519) is
-in-tree with no external dependency. See [docs/SPEC.md](docs/SPEC.md) and
-[docs/NOTES.md](docs/NOTES.md).
+in-tree with no external dependency. See [docs/NOTES.md](docs/NOTES.md) for
+design notes and current limitations.
 
 ## Development
 

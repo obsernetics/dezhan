@@ -2,7 +2,7 @@
 --
 --  Systematic Reed-Solomon over GF(2^8), enforcing the spec's mandatory
 --  invariant: "recoverable failures must always reconstruct original content"
---  (docs/SPEC.md, Trusted Core, Erasure Coding).
+--  (the spec, Trusted Core, Erasure Coding).
 --
 --  Implemented in-tree with no external dependency. gnatprove proves absence of
 --  run-time errors and termination; the algebraic reconstruction guarantee is

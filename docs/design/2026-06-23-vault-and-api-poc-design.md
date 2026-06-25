@@ -2,7 +2,7 @@
 
 Date: 2026-06-23
 Status: Implemented (end-to-end POC)
-Spec source of truth: `docs/SPEC.md` (Immutable Vault, Security Model, MVP).
+Design scope: Immutable Vault, Security Model, MVP. (The standalone docs/SPEC.md has been retired; the implementation and these design docs are the reference.)
 
 ## Goal
 

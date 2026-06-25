@@ -2,7 +2,7 @@
 
 Date: 2026-06-22
 Status: Implemented and verified
-Spec source of truth: `docs/SPEC.md` (Trusted Core, Retention State Machine).
+Design scope: Trusted Core, Retention State Machine. (The standalone docs/SPEC.md has been retired; the implementation and these design docs are the reference.)
 
 ## Goal
 

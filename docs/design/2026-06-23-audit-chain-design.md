@@ -2,7 +2,7 @@
 
 Date: 2026-06-23
 Status: Implemented and verified
-Spec source of truth: `docs/SPEC.md` (Trusted Core, Audit Chain).
+Design scope: Trusted Core, Audit Chain. (The standalone docs/SPEC.md has been retired; the implementation and these design docs are the reference.)
 
 ## Goal
 

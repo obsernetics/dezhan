@@ -3,7 +3,7 @@
 --  An append-only, hash-chained log. Each entry carries the hash of the
 --  previous entry, so altering any past record breaks the link to its
 --  successor. This enforces the spec's mandatory invariant: "past audit records
---  cannot be altered undetected" (docs/SPEC.md, Trusted Core, Audit Chain).
+--  cannot be altered undetected" (the spec, Trusted Core, Audit Chain).
 --
 --  Structural tamper-evidence is proved here. The proof rests on one explicit
 --  cryptographic assumption (Assume_Hash_Binds): that an entry's hash binds its

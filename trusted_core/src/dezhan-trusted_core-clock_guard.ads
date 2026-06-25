@@ -2,7 +2,7 @@
 --
 --  Produces the Trusted_Time consumed by the Retention State Machine while
 --  enforcing the spec's mandatory invariant: "System time manipulation cannot
---  invalidate active locks." (docs/SPEC.md → Clock Integrity Guard.)
+--  invalidate active locks." (the spec → Clock Integrity Guard.)
 --
 --  Trusted time advances ONLY by elapsed time from a monotonic source; the
 --  untrusted realtime clock is used solely for anomaly detection and never

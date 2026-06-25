@@ -42,7 +42,7 @@ finished, verified work. Keep it current as the trusted core grows.
   metadata corruption loses an object. Tuning the K/M layout per data class is a
   follow-up.
 
-## Future improvements (per docs/SPEC.md, deferred by scope)
+## Future improvements (deferred by scope)
 
 Trusted core: all four units plus both Audit Chain extras are implemented.
 The standalone independent audit verifier (`verifier/`, `dezhan_verify <root>`)
