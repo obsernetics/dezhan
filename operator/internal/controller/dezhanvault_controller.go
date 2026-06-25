@@ -43,6 +43,7 @@ type DezhanVaultReconciler struct {
 // +kubebuilder:rbac:groups=dezhan.obsernetics.io,resources=dezhanvaults/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *DezhanVaultReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -65,6 +66,9 @@ func (r *DezhanVaultReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	if err := r.reconcileStatefulSet(ctx, &vault); err != nil {
 		return r.fail(ctx, &vault, "StatefulSetError", err)
+	}
+	if err := r.reconcilePVCExpansion(ctx, &vault); err != nil {
+		return r.fail(ctx, &vault, "ExpansionError", err)
 	}
 
 	var sts appsv1.StatefulSet
@@ -196,6 +200,36 @@ func (r *DezhanVaultReconciler) reconcileStatefulSet(ctx context.Context, v *dez
 // API server's pod-template defaults (imagePullPolicy, dnsPolicy, ...) are left
 // untouched. Replacing the whole PodSpec each pass would fight those defaults
 // and spin the controller in a hot update loop.
+// reconcilePVCExpansion grows the vault's PersistentVolumeClaim when spec.storage
+// increases. StatefulSet volumeClaimTemplates are immutable, so online expansion
+// is done by patching the live PVC (data-<name>-0). The StorageClass must allow
+// volume expansion. Shrinking is never attempted (the API forbids it).
+func (r *DezhanVaultReconciler) reconcilePVCExpansion(ctx context.Context, v *dezhanv1alpha1.DezhanVault) error {
+	pvcName := fmt.Sprintf("%s-%s-0", dataVolume, v.Name)
+	var pvc corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: v.Namespace}, &pvc); err != nil {
+		// Not provisioned yet (or no provisioner, as in tests): nothing to grow.
+		return client.IgnoreNotFound(err)
+	}
+	cur := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if v.Spec.Storage.Cmp(cur) <= 0 {
+		return nil // desired <= current: no expansion
+	}
+	patch := client.MergeFrom(pvc.DeepCopy())
+	if pvc.Spec.Resources.Requests == nil {
+		pvc.Spec.Resources.Requests = corev1.ResourceList{}
+	}
+	pvc.Spec.Resources.Requests[corev1.ResourceStorage] = v.Spec.Storage
+	if err := r.Patch(ctx, &pvc, patch); err != nil {
+		return err
+	}
+	if r.Recorder != nil {
+		r.Recorder.Eventf(v, corev1.EventTypeNormal, "Expanded",
+			"PVC %s grown to %s", pvcName, v.Spec.Storage.String())
+	}
+	return nil
+}
+
 func applyPodSpec(spec *corev1.PodSpec, v *dezhanv1alpha1.DezhanVault) {
 	spec.SecurityContext = &corev1.PodSecurityContext{
 		RunAsNonRoot: ptr(true),
@@ -239,6 +273,9 @@ func vaultEnv(v *dezhanv1alpha1.DezhanVault) []corev1.EnvVar {
 	}
 	if v.Spec.DeleteQuorum > 0 {
 		env = append(env, corev1.EnvVar{Name: "DEZHAN_DELETE_QUORUM", Value: strconv.Itoa(int(v.Spec.DeleteQuorum))})
+	}
+	if v.Spec.ScrubIntervalSeconds > 0 {
+		env = append(env, corev1.EnvVar{Name: "DEZHAN_SCRUB_INTERVAL", Value: strconv.Itoa(int(v.Spec.ScrubIntervalSeconds))})
 	}
 	return env
 }

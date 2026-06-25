@@ -1,0 +1,23 @@
+# dezhan operator Helm values.
+operator:
+  image: ghcr.io/obsernetics/dezhan-operator:latest
+  replicas: 1
+  leaderElect: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+# Optionally provision a DezhanVault with the chart.
+vault:
+  create: false
+  name: dezhan
+  storage: 50Gi
+  storageClassName: ""      # empty = cluster default
+  requireAuth: true
+  deleteQuorum: 0
+  scrubIntervalSeconds: 0   # 0 = server default (300s)
+  secretName: ""            # Secret with DEZHAN_VAULT_KEY, DEZHAN_SECRET, ...
+
+# Optionally install the Prometheus Operator ServiceMonitor.
+serviceMonitor:
+  enabled: false

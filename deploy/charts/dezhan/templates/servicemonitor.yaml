@@ -1,0 +1,20 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dezhan
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: dezhan
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dezhan
+      app.kubernetes.io/managed-by: dezhan-operator
+  endpoints:
+    - port: s3
+      path: /metrics
+      interval: 30s
+{{- end }}

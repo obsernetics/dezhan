@@ -47,10 +47,11 @@ Point any S3 client at `http://my-vault.<namespace>.svc:8080`.
 |---|---|---|
 | `image` | `ghcr.io/obsernetics/dezhan:latest` | server image |
 | `port` | `8080` | listen port |
-| `storage` | `50Gi` | persistent volume size |
+| `storage` | `50Gi` | persistent volume size (raise it to expand online) |
 | `storageClassName` | cluster default | PVC storage class |
 | `requireAuth` | `true` | reject unsigned requests |
 | `deleteQuorum` | `0` | approver co-signatures required to delete |
+| `scrubIntervalSeconds` | `0` (server default 300) | recurring verify-and-self-heal interval |
 | `secretName` | none | Secret whose keys become server env vars |
 | `serviceType` | `ClusterIP` | `ClusterIP` (headless) / `NodePort` / `LoadBalancer` |
 | `resources` | none | container requests/limits |
@@ -73,6 +74,9 @@ CR.
 - Reconciles are level-based and idempotent: a steady-state reconcile makes no
   API writes (no hot update loop), and owned-object changes are watched, so a
   deleted Service or StatefulSet is recreated automatically.
+- Online volume expansion: raise `spec.storage` and the operator grows the PVC
+  in place (the StorageClass must set `allowVolumeExpansion: true`). Shrinking is
+  never attempted.
 
 ## Development
 

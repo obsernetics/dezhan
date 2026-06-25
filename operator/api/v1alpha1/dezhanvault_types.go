@@ -38,6 +38,12 @@ type DezhanVaultSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	DeleteQuorum int32 `json:"deleteQuorum,omitempty"`
 
+	// ScrubIntervalSeconds schedules the recurring verify-and-self-heal pass.
+	// Zero uses the server default (300s).
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ScrubIntervalSeconds int32 `json:"scrubIntervalSeconds,omitempty"`
+
 	// SecretName names a Secret whose keys are exported as environment
 	// variables to the server (e.g. DEZHAN_VAULT_KEY, DEZHAN_SECRET,
 	// DEZHAN_ADMIN_TOKEN, DEZHAN_APPROVERS). Recommended for all production

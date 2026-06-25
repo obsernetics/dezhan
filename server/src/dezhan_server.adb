@@ -72,6 +72,16 @@ procedure Dezhan_Server is
    KDF_Iters : constant Positive :=
      Positive'Value (Env ("DEZHAN_KDF_ITERS", "200000"));
 
+   --  Background integrity-scrub interval in seconds (default 300). Set
+   --  DEZHAN_SCRUB_INTERVAL to schedule recurring verify-and-self-heal passes.
+   function Scrub_Interval_Secs return Duration is
+   begin
+      return Duration'Value (Env ("DEZHAN_SCRUB_INTERVAL", "300"));
+   exception
+      when others => return 300.0;
+   end Scrub_Interval_Secs;
+   Scrub_Interval : constant Duration := Scrub_Interval_Secs;
+
    --  Key-encryption key from the passphrase and salt (PBKDF2-HMAC-SHA256). The
    --  passphrase is folded to 32 bytes with SHA-256 first so any length works.
    function KEK_From (Pass : String; Salt : Byte_Array; Iters : Positive)
@@ -1883,8 +1893,8 @@ procedure Dezhan_Server is
    task body Scrubber is
    begin
       loop
-         delay 300.0;   --  periodic integrity scrub (holds the vault lock for
-                        --  an O(N) pass, so run it infrequently)
+         delay Scrub_Interval;   --  periodic integrity scrub (holds the vault
+                        --  lock for an O(N) pass, so run it infrequently)
          Vault_Lock.Acquire;
          begin
             Last_Scrub := Scrub (V);

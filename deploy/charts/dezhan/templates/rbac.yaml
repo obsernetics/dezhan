@@ -2,12 +2,12 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: dezhan-operator
-  namespace: dezhan-system
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: dezhan-operator
+  name: {{ .Release.Name }}-dezhan-operator
 rules:
   - apiGroups: ["dezhan.obsernetics.io"]
     resources: ["dezhanvaults"]
@@ -22,11 +22,8 @@ rules:
     resources: ["statefulsets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["services"]
+    resources: ["services", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
@@ -34,22 +31,21 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: dezhan-operator
+  name: {{ .Release.Name }}-dezhan-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: dezhan-operator
+  name: {{ .Release.Name }}-dezhan-operator
 subjects:
   - kind: ServiceAccount
     name: dezhan-operator
-    namespace: dezhan-system
+    namespace: {{ .Release.Namespace }}
 ---
-# Leader election for HA operator deployments.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: dezhan-operator-leader-election
-  namespace: dezhan-system
+  namespace: {{ .Release.Namespace }}
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -62,7 +58,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: dezhan-operator-leader-election
-  namespace: dezhan-system
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -70,4 +66,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: dezhan-operator
-    namespace: dezhan-system
+    namespace: {{ .Release.Namespace }}

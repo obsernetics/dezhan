@@ -14,22 +14,27 @@ An on-prem alternative to MinIO and Veeam.
 
 ## Install
 
-Kubernetes (deploys the operator and a vault, generates credentials):
+On-prem (pulls the image, runs it, prints generated credentials):
 
 ```sh
-./install-k8s.sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/obsernetics/dezhan/main/install.sh | sh
 ```
 
-On-prem with Docker (builds, runs, generates credentials):
+Kubernetes, the operator (then create a `DezhanVault`):
 
 ```sh
-./install.sh
+kubectl apply -f https://raw.githubusercontent.com/obsernetics/dezhan/main/deploy/dezhan.yaml
 ```
 
-Both print the endpoint, access key, secret, and vault key. Tune with env vars
-(`DEZHAN_STORAGE`, `DEZHAN_PORT`, `DEZHAN_VAULT_KEY`, ...); see the script
-headers and [operator/README.md](operator/README.md) for the full `DezhanVault`
-spec.
+Or with Helm:
+
+```sh
+helm install dezhan ./deploy/charts/dezhan
+```
+
+For a one-command cluster install that also provisions a vault and generates
+credentials, run `./install-k8s.sh`. The full `DezhanVault` spec is in
+[operator/README.md](operator/README.md).
 
 ## Use it
 
@@ -70,8 +75,7 @@ system clock cannot expire a lock.
 
 `/metrics` is Prometheus format; the operator annotates each vault Service for
 scraping. Apply the ServiceMonitor, Grafana dashboard, alerts, and an OTel
-Collector bridge with `kubectl apply -f operator/config/observability/`. How
-dezhan compares to Longhorn is in [docs/LONGHORN.md](docs/LONGHORN.md).
+Collector bridge with `kubectl apply -f operator/config/observability/`.
 
 ## How it works
 

@@ -1,0 +1,18 @@
+{{- if .Values.vault.create }}
+apiVersion: dezhan.obsernetics.io/v1alpha1
+kind: DezhanVault
+metadata:
+  name: {{ .Values.vault.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  storage: {{ .Values.vault.storage }}
+  {{- with .Values.vault.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  requireAuth: {{ .Values.vault.requireAuth }}
+  deleteQuorum: {{ .Values.vault.deleteQuorum }}
+  scrubIntervalSeconds: {{ .Values.vault.scrubIntervalSeconds }}
+  {{- with .Values.vault.secretName }}
+  secretName: {{ . }}
+  {{- end }}
+{{- end }}
