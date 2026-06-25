@@ -5,31 +5,36 @@ on:
     branches: [ main ]
   pull_request:
 
-# Build the product, run every unit test, and -- as a hard gate -- run the SPARK
-# proof of the trusted core. The job fails if gnatprove reports a single
+# Build the product, run every unit test, measure trusted-core coverage, and as
+# a hard gate run the SPARK proof. The job fails if gnatprove reports a single
 # unproved check, so the mandatory immutability invariants stay machine-proved
 # on every commit.
 jobs:
   verify:
-    name: build · prove · test
+    name: build / prove / test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Alire
         uses: alire-project/setup-alire@v4
-        with:
-          toolchain: gnat_native^14 gprbuild
 
-      - name: Provision GNATprove
+      - name: Provision toolchain and GNATprove
         run: |
-          alr --non-interactive install gnatprove
+          alr -n toolchain --select gnat_native gprbuild
+          alr -n install gnatprove
+          # Put the Alire-managed GNAT, GPRbuild, gcov, and gnatprove on PATH
+          # for every later step.
+          for d in "$HOME"/.local/share/alire/toolchains/*/bin; do
+            [ -d "$d" ] && echo "$d" >> "$GITHUB_PATH"
+          done
           echo "$HOME/.alire/bin" >> "$GITHUB_PATH"
 
       - name: Toolchain versions
         run: |
-          gprbuild --version
-          gnatprove --version
+          gnat --version | head -1
+          gprbuild --version | head -1
+          gnatprove --version | head -1
 
       - name: SPARK proof gate (hard)
         run: sh scripts/prove.sh
