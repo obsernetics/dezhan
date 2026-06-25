@@ -67,11 +67,19 @@ system clock cannot expire a lock.
 | `DEZHAN_CREDENTIALS` | extra `accesskey secret [ro\|rw]` lines | `<root>/credentials` |
 | `DEZHAN_ADMIN_TOKEN` | token (`X-Dezhan-Admin-Token`) gating `/admin/*` | unset |
 | `DEZHAN_DELETE_QUORUM` / `DEZHAN_APPROVERS` | four-eyes deletes | `0` / unset |
+| `DEZHAN_APPROVAL_TTL` | seconds a staged delete approval stays valid | `3600` |
 | `DEZHAN_SCRUB_INTERVAL` | seconds between integrity scrubs | `300` |
 
 `dezhan_server [port] [data-dir]`. Operations: `GET /healthz`, `GET /metrics`
 (Prometheus), `POST /admin/{seal,scrub,checkpoint}`, web UI at `/`. Run
 `sh scripts/smoke.sh` for a boto3 conformance check.
+
+With `DEZHAN_DELETE_QUORUM` set, a delete needs approver co-signatures, either
+synchronously (secrets in the `X-Dezhan-Approvals` header) or staged: approvers
+pre-authorize a specific object from separate sessions with
+`POST /approve?resource=/bucket/key` (header `X-Dezhan-Approval: <secret>`), and
+the delete succeeds once enough approvals accrue. Staged approvals expire after
+`DEZHAN_APPROVAL_TTL` and are consumed on use.
 
 ## Kubernetes operator
 

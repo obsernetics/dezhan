@@ -342,6 +342,78 @@ procedure Dezhan_Server is
       return Count;
    end Approval_Count;
 
+   --  Asynchronous (staged) four-eyes: approvers pre-approve the deletion of a
+   --  specific resource from separate sessions via POST /approve. Approvals
+   --  accumulate here until a delete of that resource accrues the quorum, then
+   --  they are consumed. They expire after DEZHAN_APPROVAL_TTL seconds so a
+   --  stale, unused approval cannot authorize a later delete.
+   Approval_TTL : constant Trusted_Time :=
+     Trusted_Time (Env_Nat ("DEZHAN_APPROVAL_TTL", 3600));
+   Appr_Sep : constant String := (1 => Character'Val (10));  --  LF
+
+   package Approval_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Trusted_Time,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
+   --  Key is Resource & LF & Approver; element is the approval's trusted time.
+   protected Pending_Approvals is
+      procedure Add (Resource, Approver : String; T : Trusted_Time);
+      function Count (Resource : String; Now : Trusted_Time) return Natural;
+      procedure Clear (Resource : String);
+   private
+      Store : Approval_Maps.Map;
+   end Pending_Approvals;
+
+   protected body Pending_Approvals is
+      procedure Add (Resource, Approver : String; T : Trusted_Time) is
+      begin
+         Store.Include (Resource & Appr_Sep & Approver, T);
+      end Add;
+
+      function Has_Prefix (S, P : String) return Boolean is
+        (S'Length >= P'Length
+         and then S (S'First .. S'First + P'Length - 1) = P);
+
+      function Count (Resource : String; Now : Trusted_Time) return Natural is
+         Prefix : constant String := Resource & Appr_Sep;
+         N      : Natural := 0;
+         C      : Approval_Maps.Cursor := Store.First;
+      begin
+         while Approval_Maps.Has_Element (C) loop
+            if Has_Prefix (Approval_Maps.Key (C), Prefix)
+              and then Now - Approval_Maps.Element (C) <= Approval_TTL
+            then
+               N := N + 1;
+            end if;
+            Approval_Maps.Next (C);
+         end loop;
+         return N;
+      end Count;
+
+      procedure Clear (Resource : String) is
+         Prefix : constant String := Resource & Appr_Sep;
+         More   : Boolean := True;
+      begin
+         --  Delete matching keys one pass at a time (sets are tiny); mutating
+         --  during a single cursor walk is unsafe, so restart after each delete.
+         while More loop
+            More := False;
+            declare
+               C : Approval_Maps.Cursor := Store.First;
+            begin
+               while Approval_Maps.Has_Element (C) loop
+                  if Has_Prefix (Approval_Maps.Key (C), Prefix) then
+                     Store.Delete (C);
+                     More := True;
+                     exit;
+                  end if;
+                  Approval_Maps.Next (C);
+               end loop;
+            end;
+         end loop;
+      end Clear;
+   end Pending_Approvals;
+
    --  Credentials file lines: "accesskey secret [ro|rw]" (default rw).
    procedure Load_Credentials (Path : String) is
       F : File_Type;
@@ -1506,6 +1578,7 @@ procedure Dezhan_Server is
          declare
             Is_Control : constant Boolean :=
               Path0 = "/" or else Path0 = "/healthz" or else Path0 = "/metrics"
+              or else Path0 = "/approve"
               or else (Path0'Length >= 6
                        and then Path0 (Path0'First .. Path0'First + 5) = "/admin");
             Princ_Role : Role := Read_Write;
@@ -1534,18 +1607,35 @@ procedure Dezhan_Server is
 
                --  Four-eyes: a destructive delete needs a co-signing quorum.
                --  Destructive = DELETE on an object/bucket, or batch delete
-               --  (POST ...?delete).
+               --  (POST ...?delete). Approvals may be synchronous (secrets in
+               --  the X-Dezhan-Approvals header) and, for a single-object/bucket
+               --  DELETE, staged in advance via POST /approve. Staged approvals
+               --  for the resource are consumed once the delete is authorized.
                if Delete_Quorum > 0
                  and then (Method = "DELETE"
                            or else (Method = "POST"
                                     and then Index (PQuery, "delete") /= 0))
-                 and then Approval_Count (Header (Head, "X-Dezhan-Approvals"))
-                            < Delete_Quorum
                then
-                  Send_Text (Ch, "403 Forbidden",
-                    "delete requires" & Natural'Image (Delete_Quorum)
-                    & " approver co-signatures");
-                  return;
+                  declare
+                     Sync_N  : constant Natural :=
+                       Approval_Count (Header (Head, "X-Dezhan-Approvals"));
+                     Async_N : constant Natural :=
+                       (if Method = "DELETE"
+                        then Pending_Approvals.Count (Path0, Now (V)) else 0);
+                  begin
+                     if Sync_N + Async_N < Delete_Quorum then
+                        Send_Text (Ch, "403 Forbidden",
+                          "delete requires" & Natural'Image (Delete_Quorum)
+                          & " approver co-signatures (have"
+                          & Natural'Image (Sync_N + Async_N)
+                          & "); stage approvals via POST /approve?resource="
+                          & Path0);
+                        return;
+                     end if;
+                     if Method = "DELETE" then
+                        Pending_Approvals.Clear (Path0);  --  consume on use
+                     end if;
+                  end;
                end if;
             end;
          end if;
@@ -1608,6 +1698,29 @@ procedure Dezhan_Server is
 
          elsif Method = "POST" and then Path = "/admin/tick" then
             Send_Text (Ch, "200 OK", "trusted_time" & Trusted_Time'Image (Now (V)));
+
+         elsif Method = "POST" and then Path0 = "/approve" then
+            --  Stage a four-eyes approval for deleting a resource. Authenticated
+            --  by an approver secret (X-Dezhan-Approval), not the S3 credential,
+            --  so approvers need not hold write access.
+            declare
+               Secret   : constant String := Header (Head, "X-Dezhan-Approval");
+               Resource : constant String := Pct_Decode (Q_Val (PQuery, "resource="));
+            begin
+               if Delete_Quorum = 0 then
+                  Send_Text (Ch, "409 Conflict", "delete quorum is not enabled");
+               elsif Resource = "" then
+                  Send_Text (Ch, "400 Bad Request", "missing ?resource=");
+               elsif not In_List (Secret, Approvers_Raw) then
+                  Send_Text (Ch, "403 Forbidden", "not a recognized approver");
+               else
+                  Pending_Approvals.Add (Resource, Secret, Now (V));
+                  Send_Text (Ch, "200 OK",
+                    "approval recorded for " & Resource & " ("
+                    & Natural'Image (Pending_Approvals.Count (Resource, Now (V)))
+                    & " of" & Natural'Image (Delete_Quorum) & ")");
+               end if;
+            end;
 
          elsif Method = "POST" and then Path = "/admin/seal" then
             Seal (V);
