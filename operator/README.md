@@ -64,9 +64,15 @@ CR.
 - A vault is a single writer over durable storage, so it runs as a
   one-replica StatefulSet with a `ReadWriteOnce` volume. Do not scale it; the
   immutability and audit-chain guarantees assume one writer per volume.
-- The pod runs non-root, read-only root filesystem, all capabilities dropped;
-  only `/data` is writable.
+- The pod runs non-root, read-only root filesystem, all capabilities dropped,
+  `seccomp=RuntimeDefault`; only `/data` is writable.
 - Readiness and liveness use the server's `GET /healthz`.
+- Deleting the `DezhanVault` removes the StatefulSet and Service but
+  intentionally retains the PVC, so vault data is never destroyed by a CR
+  delete. Reclaim the volume manually if you truly want the data gone.
+- Reconciles are level-based and idempotent: a steady-state reconcile makes no
+  API writes (no hot update loop), and owned-object changes are watched, so a
+  deleted Service or StatefulSet is recreated automatically.
 
 ## Development
 
