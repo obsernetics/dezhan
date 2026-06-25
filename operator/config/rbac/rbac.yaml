@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dezhan-operator
+  namespace: dezhan-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dezhan-operator
+rules:
+  - apiGroups: ["dezhan.obsernetics.io"]
+    resources: ["dezhanvaults"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["dezhan.obsernetics.io"]
+    resources: ["dezhanvaults/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["dezhan.obsernetics.io"]
+    resources: ["dezhanvaults/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dezhan-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dezhan-operator
+subjects:
+  - kind: ServiceAccount
+    name: dezhan-operator
+    namespace: dezhan-system
+---
+# Leader election for HA operator deployments.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dezhan-operator-leader-election
+  namespace: dezhan-system
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dezhan-operator-leader-election
+  namespace: dezhan-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dezhan-operator-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: dezhan-operator
+    namespace: dezhan-system

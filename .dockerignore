@@ -1,0 +1,15 @@
+# Keep the build context small and reproducible: no build artifacts, VM images,
+# git history, or the Go operator tree (built separately).
+**/obj/
+**/lib/
+**/*.o
+**/*.ali
+vm/build/
+vm/keys/
+operator/bin/
+operator/vendor/
+.git/
+.github/
+.vscode/
+dist/
+*.log

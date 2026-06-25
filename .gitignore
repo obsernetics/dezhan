@@ -3,9 +3,15 @@ obj/
 lib/
 alire/
 config/
+!operator/config/
+!operator/config/**
 *.ali
 *.o
 gnatprove/
+
+# Go operator build artifacts
+operator/bin/
+operator/cover.out
 
 # Local dev tooling and build VM (not part of the published software)
 vm/

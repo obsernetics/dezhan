@@ -40,6 +40,31 @@ Run the end-to-end conformance test (needs Python with `boto3`):
 sh scripts/smoke.sh
 ```
 
+## Run in a container
+
+```sh
+docker build -t dezhan .
+docker run -p 8080:8080 -v dezhan-data:/data \
+  -e DEZHAN_VAULT_KEY="a-strong-passphrase" -e DEZHAN_REQUIRE_AUTH=1 dezhan
+```
+
+The image is distroless and runs as a non-root user; vault data lives on the
+`/data` volume.
+
+## Run on Kubernetes
+
+Deploy the operator and declare a vault with a single custom resource:
+
+```sh
+kubectl apply -f operator/config/crd/
+kubectl apply -f operator/config/rbac/
+kubectl apply -f operator/config/manager/
+kubectl apply -f operator/config/samples/dezhanvault.yaml
+kubectl get dezhanvaults
+```
+
+See [operator/README.md](operator/README.md) for the full `DezhanVault` spec.
+
 ## Use it with the AWS CLI
 
 ```sh

@@ -1,0 +1,36 @@
+# A production-shaped vault: signed requests required, four-eyes deletes, and
+# all secrets sourced from a Secret (never inline in the CR).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-vault-secrets
+  namespace: default
+type: Opaque
+stringData:
+  DEZHAN_VAULT_KEY: "change-me-to-a-long-random-passphrase"
+  DEZHAN_ACCESS_KEY: "dezhanadmin"
+  DEZHAN_SECRET: "change-me-too-0123456789abcdef"
+  DEZHAN_ADMIN_TOKEN: "change-me-admin-token"
+  DEZHAN_APPROVERS: "alice-secret,bob-secret,carol-secret"
+---
+apiVersion: dezhan.obsernetics.io/v1alpha1
+kind: DezhanVault
+metadata:
+  name: my-vault
+  namespace: default
+spec:
+  image: ghcr.io/obsernetics/dezhan:latest
+  port: 8080
+  storage: 100Gi
+  # storageClassName: fast-ssd   # omit to use the cluster default
+  requireAuth: true
+  deleteQuorum: 2
+  secretName: my-vault-secrets
+  serviceType: ClusterIP
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
