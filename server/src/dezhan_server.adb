@@ -257,6 +257,16 @@ procedure Dezhan_Server is
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
    Credentials : Cred_Maps.Map;
 
+   --  RBAC: each credential is read-only or read-write on the S3 data plane.
+   --  The /admin control plane is gated separately by DEZHAN_ADMIN_TOKEN.
+   type Role is (Read_Only, Read_Write);
+   package Role_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Role,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   Roles       : Role_Maps.Map;
+   Admin_Token : constant String := Env ("DEZHAN_ADMIN_TOKEN", "");
+
+   --  Credentials file lines: "accesskey secret [ro|rw]" (default rw).
    procedure Load_Credentials (Path : String) is
       F : File_Type;
    begin
@@ -267,9 +277,18 @@ procedure Dezhan_Server is
             Sp   : constant Natural := Index (Line, " ");
          begin
             if Sp > 0 then
-               Credentials.Include
-                 (Trim (Line (Line'First .. Sp - 1), Both),
-                  Trim (Line (Sp + 1 .. Line'Last), Both));
+               declare
+                  Akid : constant String := Trim (Line (Line'First .. Sp - 1), Both);
+                  Rest : constant String := Trim (Line (Sp + 1 .. Line'Last), Both);
+                  Sp2  : constant Natural := Index (Rest, " ");
+                  Secret : constant String :=
+                    (if Sp2 = 0 then Rest else Trim (Rest (Rest'First .. Sp2 - 1), Both));
+                  Rl   : constant String :=
+                    (if Sp2 = 0 then "" else Trim (Rest (Sp2 + 1 .. Rest'Last), Both));
+               begin
+                  Credentials.Include (Akid, Secret);
+                  Roles.Include (Akid, (if Rl = "ro" then Read_Only else Read_Write));
+               end;
             end if;
          end;
       end loop;
@@ -600,7 +619,8 @@ procedure Dezhan_Server is
    --  Verify a SigV4 Authorization header against the request and the demo
    --  credential. Anonymous is allowed unless DEZHAN_REQUIRE_AUTH is set.
    function Check_Auth
-     (Head, Method, Path, Payload_Hash : String) return Auth_Status
+     (Head, Method, Path, Payload_Hash : String;
+      Princ_Role : out Role) return Auth_Status
    is
       A     : constant String := Header (Head, "Authorization");
       QPos  : constant Natural := Index (Path, "?");
@@ -637,12 +657,15 @@ procedure Dezhan_Server is
               (Credentials.Element (AKID), Method, Path0, Canon_Q,
                To_String (CH), SH, Phash, Amz_Date, SDate, Region, Service) = Sig
          then
+            Princ_Role :=
+              (if Roles.Contains (AKID) then Roles.Element (AKID) else Read_Write);
             return Valid;
          else
             return Invalid;
          end if;
       end Verify_Sig;
    begin
+      Princ_Role := Read_Write;   --  default for anonymous / unset (overwritten on Valid)
       if A /= "" then
          if Index (A, "AWS4-HMAC-SHA256") = 0 then
             return Invalid;
@@ -1391,14 +1414,25 @@ procedure Dezhan_Server is
             return;
          end if;
 
+         --  Admin control plane: gate /admin behind DEZHAN_ADMIN_TOKEN when set.
+         if Path0'Length >= 6
+           and then Path0 (Path0'First .. Path0'First + 5) = "/admin"
+           and then Admin_Token /= ""
+           and then Header (Head, "X-Dezhan-Admin-Token") /= Admin_Token
+         then
+            Send_Text (Ch, "403 Forbidden", "admin token required");
+            return;
+         end if;
+
          --  Authenticate data-plane requests via SigV4 when present: the legacy
          --  /v API and any S3 bucket/key path. Control routes (UI, health,
-         --  metrics, admin) are exempt.
+         --  metrics, admin) are exempt (admin is gated by the token above).
          declare
             Is_Control : constant Boolean :=
               Path0 = "/" or else Path0 = "/healthz" or else Path0 = "/metrics"
               or else (Path0'Length >= 6
                        and then Path0 (Path0'First .. Path0'First + 5) = "/admin");
+            Princ_Role : Role := Read_Write;
          begin
          if not Is_Control then
             declare
@@ -1407,13 +1441,18 @@ procedure Dezhan_Server is
                   then Header (Head, "x-amz-content-sha256")
                   else Dezhan.Sigv4.Hex_SHA256 (""));
                St : constant Auth_Status :=
-                 Check_Auth (Head, Method, Path, Payload_Hash);
+                 Check_Auth (Head, Method, Path, Payload_Hash, Princ_Role);
+               Is_Write : constant Boolean :=
+                 Method = "PUT" or else Method = "POST" or else Method = "DELETE";
             begin
                if St = Missing then
                   Send_Text (Ch, "401 Unauthorized", "authentication required");
                   return;
                elsif St = Invalid then
                   Send_Text (Ch, "403 Forbidden", "invalid SigV4 signature");
+                  return;
+               elsif St = Valid and then Princ_Role = Read_Only and then Is_Write then
+                  Send_Text (Ch, "403 Forbidden", "read-only credential");
                   return;
                end if;
             end;
@@ -1787,6 +1826,7 @@ procedure Dezhan_Server is
 begin
    Open (V, Root, Key);
    Credentials.Include (Access_Key, Secret_Key);   --  seed the demo account
+   Roles.Include (Access_Key, Read_Write);
    Load_Credentials (Env ("DEZHAN_CREDENTIALS", Root & "/credentials"));
    Initialize;
    Create_Socket (Server);
