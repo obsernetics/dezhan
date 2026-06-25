@@ -1,47 +1,48 @@
 # dezhan
 
 [![ci](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml/badge.svg)](https://github.com/obsernetics/dezhan/actions/workflows/ci.yml)
+[![operator](https://github.com/obsernetics/dezhan/actions/workflows/operator.yml/badge.svg)](https://github.com/obsernetics/dezhan/actions/workflows/operator.yml)
 [![SPARK proof: 325 checks, 0 unproved](https://img.shields.io/badge/SPARK%20proof-325%20checks%2C%200%20unproved-brightgreen)](docs/SPEC.md)
 [![trusted-core coverage 95%](https://img.shields.io/badge/trusted--core%20coverage-95%25-brightgreen)](scripts/coverage.sh)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](#)
 
-A secure, immutable backup vault that speaks S3. Point any S3 client or backup
-tool at it (aws-cli, restic, Veeam, Velero, boto3) and your data is stored
-content-addressed, encrypted, erasure-coded, and optionally WORM-locked so it
-cannot be modified or deleted before its retention expires.
+On-prem, air-gapped, immutable backup vault that speaks S3. Point any S3 client
+(aws-cli, restic, Veeam, Velero, boto3) at it; data is content-addressed,
+encrypted, erasure-coded, and WORM-locked so it cannot be changed or deleted
+before its retention expires. The integrity core is formally verified in SPARK.
+An on-prem alternative to MinIO and Veeam.
 
-It is a drop-in replacement for the storage target of Veeam and MinIO, with the
-integrity-critical core formally verified in SPARK.
+## Run on Kubernetes
 
-## Quick start
-
-Build everything (needs the Ada/SPARK toolchain, e.g. via
-[Alire](https://alire.ada.dev)):
+Install the operator and declare a vault:
 
 ```sh
-gprbuild -P dezhan.gpr        # server, CLI, and the audit verifier
+kubectl apply -f operator/config/crd/
+kubectl apply -f operator/config/rbac/
+kubectl apply -f operator/config/manager/
 ```
 
-Run the server (`<port> <data-dir>`):
+```yaml
+apiVersion: dezhan.obsernetics.io/v1alpha1
+kind: DezhanVault
+metadata:
+  name: my-vault
+spec:
+  storage: 100Gi
+  requireAuth: true
+  deleteQuorum: 2          # deletes need 2 approver co-signatures
+  secretName: my-secrets  # DEZHAN_VAULT_KEY, DEZHAN_SECRET, ...
+```
 
 ```sh
-export DEZHAN_VAULT_KEY="a-strong-passphrase"   # encrypts data at rest
-export DEZHAN_REQUIRE_AUTH=1                     # require signed requests
-server/obj/dezhan_server 8080 /var/lib/dezhan
+kubectl apply -f my-vault.yaml
+kubectl get dezhanvaults     # READY, ENDPOINT
 ```
 
-On first start it generates a random data key wrapped under your passphrase and
-prints `dezhan 1.0 listening on port 8080`. It warns if run with insecure
-defaults; for production set `DEZHAN_VAULT_KEY`, `DEZHAN_REQUIRE_AUTH`, and your
-own `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET`.
+The vault is reachable in-cluster at `http://my-vault.<namespace>.svc:8080`. Full
+spec: [operator/README.md](operator/README.md).
 
-Run the end-to-end conformance test (needs Python with `boto3`):
-
-```sh
-sh scripts/smoke.sh
-```
-
-## Run in a container
+## Run on-prem (without Kubernetes)
 
 ```sh
 docker build -t dezhan .
@@ -49,115 +50,55 @@ docker run -p 8080:8080 -v dezhan-data:/data \
   -e DEZHAN_VAULT_KEY="a-strong-passphrase" -e DEZHAN_REQUIRE_AUTH=1 dezhan
 ```
 
-The image is distroless and runs as a non-root user; vault data lives on the
-`/data` volume.
-
-## Run on Kubernetes
-
-Deploy the operator and declare a vault with a single custom resource:
+Or build the static binary (needs the Ada/SPARK toolchain via
+[Alire](https://alire.ada.dev)) and run it directly:
 
 ```sh
-kubectl apply -f operator/config/crd/
-kubectl apply -f operator/config/rbac/
-kubectl apply -f operator/config/manager/
-kubectl apply -f operator/config/samples/dezhanvault.yaml
-kubectl get dezhanvaults
+gprbuild -P dezhan.gpr
+DEZHAN_VAULT_KEY=... DEZHAN_REQUIRE_AUTH=1 server/obj/dezhan_server 8080 /var/lib/dezhan
 ```
 
-See [operator/README.md](operator/README.md) for the full `DezhanVault` spec.
-
-## Use it with the AWS CLI
+## Use it
 
 ```sh
-aws configure set aws_access_key_id     dezhanadmin
-aws configure set aws_secret_access_key dezhandemosecretkey0123456789
-aws configure set default.s3.addressing_style path
-
 ALIAS="aws --endpoint-url http://localhost:8080 --region us-east-1"
+$ALIAS s3 mb s3://backups
+$ALIAS s3 cp ./data.tar s3://backups/      # any size; multipart handled
+$ALIAS s3 ls s3://backups/
 
-$ALIAS s3 mb s3://backups                  # create a bucket
-$ALIAS s3 cp ./data.tar s3://backups/      # upload (any size; multipart handled)
-$ALIAS s3 ls s3://backups/                 # list
-$ALIAS s3 cp s3://backups/data.tar ./      # download
-```
-
-(Use your own keys via `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET` when starting the
-server.)
-
-## Use it with restic
-
-```sh
-export AWS_ACCESS_KEY_ID=dezhanadmin
-export AWS_SECRET_ACCESS_KEY=dezhandemosecretkey0123456789
-restic -r s3:http://localhost:8080/backups init
-restic -r s3:http://localhost:8080/backups backup ~/documents
-```
-
-## Make a bucket immutable (WORM / Object Lock)
-
-```sh
-# objects in this bucket cannot be overwritten or deleted before they expire
+# make a bucket immutable (WORM / Object Lock)
 $ALIAS s3api create-bucket --bucket vault --object-lock-enabled-for-bucket
 $ALIAS s3 cp important.bak s3://vault/
-$ALIAS s3 rm s3://vault/important.bak      # -> denied (403) until retention expires
+$ALIAS s3 rm  s3://vault/important.bak     # denied until retention expires
 ```
 
-Retention is enforced by a formally verified state machine, and a manipulated
+Standard S3 validated against the AWS SDK: buckets, objects, range reads, copy,
+batch delete, multipart, versioning with delete markers, user metadata,
+conditional requests, presigned URLs, SigV4, and Object Lock / WORM with legal
+hold. Retention is enforced by a formally verified state machine, and a tampered
 system clock cannot expire a lock.
-
-## What works
-
-Standard S3, validated against the AWS SDK (boto3):
-
-- Buckets: create / head / delete / list, location, versioning, object-lock config
-- Objects: put, get, head, delete, byte-range reads, copy, batch delete
-- Large objects and multipart uploads
-- Versioning with delete markers (`GET`/`DELETE` by version id, list versions)
-- Content-Type and user metadata (`x-amz-meta-*`)
-- Conditional requests (`If-None-Match` / `If-Match`)
-- Presigned URLs, and SigV4 auth (header and query forms)
-- Object Lock / WORM, legal hold, and audited retention
 
 ## Configuration
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `DEZHAN_VAULT_KEY` | passphrase the data key is wrapped under | `dezhan-demo-vault-key` |
-| `DEZHAN_NEW_VAULT_KEY` | set to rotate the passphrase on startup | (unset) |
-| `DEZHAN_REQUIRE_AUTH` | reject unsigned requests when set | (unset = anonymous) |
-| `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET` | the S3 credential | `dezhanadmin` / demo secret |
-| `DEZHAN_CREDENTIALS` | extra `accesskey secret [ro\|rw]` lines, one per account | `<root>/credentials` |
-| `DEZHAN_ADMIN_TOKEN` | require this token (`X-Dezhan-Admin-Token`) for `/admin/*` | (unset = open) |
-| `DEZHAN_DELETE_QUORUM` | co-signatures required to delete (four-eyes) | `0` (disabled) |
-| `DEZHAN_APPROVERS` | comma-separated approver secrets for delete quorum | (unset) |
-| `DEZHAN_KDF_ITERS` | PBKDF2 work factor | `200000` |
+| `DEZHAN_VAULT_KEY` | passphrase the data key is wrapped under | demo key |
+| `DEZHAN_REQUIRE_AUTH` | reject unsigned requests | unset (anonymous) |
+| `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET` | the S3 credential | `dezhanadmin` / demo |
+| `DEZHAN_CREDENTIALS` | extra `accesskey secret [ro\|rw]` lines | `<root>/credentials` |
+| `DEZHAN_ADMIN_TOKEN` | token (`X-Dezhan-Admin-Token`) gating `/admin/*` | unset |
+| `DEZHAN_DELETE_QUORUM` / `DEZHAN_APPROVERS` | four-eyes deletes | `0` / unset |
 
-Credentials are read-write by default; append `ro` to make an account read-only
-(it may GET/HEAD/list but not PUT/POST/DELETE). When `DEZHAN_DELETE_QUORUM=N` is
-set, every delete (object, bucket, or batch) must carry at least `N` distinct
-approver secrets in the `X-Dezhan-Approvals` header (comma-separated), drawn from
-`DEZHAN_APPROVERS`. This is the synchronous four-eyes control; asynchronous,
-staged approval workflows are Phase 3.
-
-Server arguments: `dezhan_server [port] [data-dir]` (defaults `8080`,
-`/tmp/dezhan-vault`).
-
-## Operations
-
-- `GET /healthz` - liveness (`ok` or `sealed`)
-- `GET /metrics` - Prometheus metrics (objects, storage bytes, scrub status, air-gap state, ...)
-- `POST /admin/seal` - make the vault read-only
-- `POST /admin/scrub` - verify and self-heal every object now
-- `POST /admin/checkpoint` - sign the audit head; `dezhan_verify <data-dir>` re-checks it offline
-- A web UI is served at `/`
+`dezhan_server [port] [data-dir]`. Operations: `GET /healthz`, `GET /metrics`
+(Prometheus), `POST /admin/{seal,scrub,checkpoint}`, web UI at `/`. Run
+`sh scripts/smoke.sh` for a boto3 conformance check.
 
 ## How it works
 
-Provable immutability is the point: the retention state machine, clock-integrity
-guard, append-only audit chain, and erasure coding are written in SPARK and
-machine-checked by `gnatprove` (325 checks, 0 unproved). The cryptography
-(SHA-256/512, ChaCha20, HMAC-SHA256, Ed25519) is in-tree with no external
-dependency. See [`docs/SPEC.md`](docs/SPEC.md) for the specification and
-[`docs/NOTES.md`](docs/NOTES.md) for design notes and current limitations.
+The retention state machine, clock-integrity guard, append-only audit chain, and
+erasure coding are written in SPARK and machine-checked by `gnatprove` (325
+checks, 0 unproved); the cryptography (SHA-256/512, ChaCha20, HMAC, Ed25519) is
+in-tree with no external dependency. See [docs/SPEC.md](docs/SPEC.md) and
+[docs/NOTES.md](docs/NOTES.md).
 
 Licensed under Apache-2.0.
