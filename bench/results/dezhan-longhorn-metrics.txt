@@ -1,0 +1,12 @@
+dezhan_objects 0
+dezhan_quarantined 0
+dezhan_audit_entries 611
+dezhan_sealed 0
+dezhan_trusted_time 376
+dezhan_scrub_runs 1
+dezhan_scrub_corrupt 0
+dezhan_scrub_shards_repaired 0
+dezhan_storage_bytes 204015
+dezhan_retention_denied_total 0
+dezhan_ingest_only 0
+dezhan_sync_window_open 1

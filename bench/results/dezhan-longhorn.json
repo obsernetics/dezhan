@@ -1,0 +1,55 @@
+{
+  "label": "dezhan-longhorn",
+  "endpoint": "http://10.43.78.152:8080",
+  "ts": 1782430399,
+  "sizes": {
+    "1KiB": {
+      "objects": 200,
+      "object_bytes": 1024,
+      "put_objs_per_s": 1.0,
+      "put_MBps": 0.0,
+      "put_p50_ms": 1010.919,
+      "put_p95_ms": 1133.229,
+      "put_p99_ms": 1296.055,
+      "get_objs_per_s": 345.2,
+      "get_MBps": 0.35,
+      "get_p50_ms": 2.741,
+      "get_p95_ms": 4.394,
+      "get_p99_ms": 5.397,
+      "list_ms": 24.143,
+      "delete_objs_per_s": 148.2
+    },
+    "256KiB": {
+      "objects": 80,
+      "object_bytes": 262144,
+      "put_objs_per_s": 0.9,
+      "put_MBps": 0.24,
+      "put_p50_ms": 1090.906,
+      "put_p95_ms": 1106.21,
+      "put_p99_ms": 1149.512,
+      "get_objs_per_s": 160.0,
+      "get_MBps": 41.94,
+      "get_p50_ms": 5.826,
+      "get_p95_ms": 9.083,
+      "get_p99_ms": 10.29,
+      "list_ms": 8.962,
+      "delete_objs_per_s": 161.8
+    },
+    "4MiB": {
+      "objects": 25,
+      "object_bytes": 4194304,
+      "put_objs_per_s": 0.5,
+      "put_MBps": 2.09,
+      "put_p50_ms": 1952.322,
+      "put_p95_ms": 2101.264,
+      "put_p99_ms": 2904.584,
+      "get_objs_per_s": 15.9,
+      "get_MBps": 66.51,
+      "get_p50_ms": 61.104,
+      "get_p95_ms": 77.297,
+      "get_p99_ms": 81.579,
+      "list_ms": 5.842,
+      "delete_objs_per_s": 153.3
+    }
+  }
+}
