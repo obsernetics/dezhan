@@ -26,14 +26,14 @@ Kubernetes, the operator (then create a `DezhanVault`):
 kubectl apply -f https://raw.githubusercontent.com/obsernetics/dezhan/main/deploy/dezhan.yaml
 ```
 
-Or with Helm:
+Or with Helm (set `vault.create=true` to provision a vault too):
 
 ```sh
 helm install dezhan ./deploy/charts/dezhan
 ```
 
-For a one-command cluster install that also provisions a vault and generates
-credentials, run `./install-k8s.sh`. The full `DezhanVault` spec is in
+A ready-to-edit `DezhanVault` is in
+[operator/config/samples](operator/config/samples); the full spec is in
 [operator/README.md](operator/README.md).
 
 ## Use it
