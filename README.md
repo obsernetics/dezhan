@@ -64,7 +64,7 @@ system clock cannot expire a lock.
 | `DEZHAN_VAULT_KEY` | passphrase the data key is wrapped under | demo key |
 | `DEZHAN_REQUIRE_AUTH` | reject unsigned requests | unset (anonymous) |
 | `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET` | the S3 credential | `dezhanadmin` / demo |
-| `DEZHAN_CREDENTIALS` | extra `accesskey secret [ro\|rw]` lines | `<root>/credentials` |
+| `DEZHAN_CREDENTIALS` | extra `accesskey secret [default] [bucket:perm ...]` lines | `<root>/credentials` |
 | `DEZHAN_ADMIN_TOKEN` | token (`X-Dezhan-Admin-Token`) gating `/admin/*` | unset |
 | `DEZHAN_DELETE_QUORUM` / `DEZHAN_APPROVERS` | four-eyes deletes | `0` / unset |
 | `DEZHAN_APPROVAL_TTL` | seconds a staged delete approval stays valid | `3600` |
@@ -73,6 +73,11 @@ system clock cannot expire a lock.
 `dezhan_server [port] [data-dir]`. Operations: `GET /healthz`, `GET /metrics`
 (Prometheus), `POST /admin/{seal,scrub,checkpoint}`, web UI at `/`. Run
 `sh scripts/smoke.sh` for a boto3 conformance check.
+
+Each credential has a default access level (`rw`, `ro`, or `none`) plus optional
+per-bucket overrides, e.g. `auditor s3cret none logs:ro` (no access except
+read-only on `logs`) or `app s3cret ro data:rw` (read everywhere, write to
+`data`). A write needs `rw` on that bucket; a read needs `ro` or `rw`.
 
 With `DEZHAN_DELETE_QUORUM` set, a delete needs approver co-signatures, either
 synchronously (secrets in the `X-Dezhan-Approvals` header) or staged: approvers

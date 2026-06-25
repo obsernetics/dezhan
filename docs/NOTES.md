@@ -153,8 +153,9 @@ demo key is used at rest).
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays
   the headline. Both modes share the S3 API, storage engine, audit chain, and
   scrubbing; only Immutable buckets use the retention state machine.
-- Local auth realm with SigV4 credentials, RBAC (per-credential ro/rw), an
-  admin-token gate for the /admin control plane, and a four-eyes delete quorum
+- Local auth realm with SigV4 credentials, RBAC (per-credential default of
+  rw/ro/none plus per-bucket overrides via "akid secret [default] [bucket:perm]"),
+  an admin-token gate for the /admin control plane, and a four-eyes delete quorum
   (DEZHAN_DELETE_QUORUM + DEZHAN_APPROVERS). Both forms are implemented:
   synchronous (secrets in the X-Dezhan-Approvals header) and staged/asynchronous
   (approvers pre-authorize a resource via POST /approve from separate sessions;

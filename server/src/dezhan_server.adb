@@ -267,14 +267,53 @@ procedure Dezhan_Server is
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
    Credentials : Cred_Maps.Map;
 
-   --  RBAC: each credential is read-only or read-write on the S3 data plane.
-   --  The /admin control plane is gated separately by DEZHAN_ADMIN_TOKEN.
-   type Role is (Read_Only, Read_Write);
+   --  RBAC: each credential has a default access level (no access / read-only /
+   --  read-write) on the S3 data plane, with optional per-bucket overrides.
+   --  Credential lines are "akid secret [default] [bucket:perm ...]" where a
+   --  perm is ro|rw|none. The /admin control plane is gated separately by
+   --  DEZHAN_ADMIN_TOKEN.
+   type Role is (No_Access, Read_Only, Read_Write);
    package Role_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => Role,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
-   Roles       : Role_Maps.Map;
-   Admin_Token : constant String := Env ("DEZHAN_ADMIN_TOKEN", "");
+   Roles        : Role_Maps.Map;   --  akid -> default role
+   Bucket_Roles : Role_Maps.Map;   --  akid & LF & bucket -> per-bucket override
+   Admin_Token  : constant String := Env ("DEZHAN_ADMIN_TOKEN", "");
+
+   --  Map a perm word to a Role; unknown defaults to full access.
+   function To_Role (S : String) return Role is
+     (if S = "ro" then Read_Only
+      elsif S = "none" then No_Access
+      else Read_Write);
+
+   --  First path segment of an S3 path ("/bucket/key" -> "bucket"); "" for "/".
+   function Bucket_Of (P : String) return String is
+   begin
+      if P'Length < 2 or else P (P'First) /= '/' then
+         return "";
+      end if;
+      declare
+         Rest : constant String := P (P'First + 1 .. P'Last);
+         Slash : constant Natural := Index (Rest, "/");
+      begin
+         return (if Slash = 0 then Rest else Rest (Rest'First .. Slash - 1));
+      end;
+   end Bucket_Of;
+
+   --  Effective access for a principal on a bucket: per-bucket override if set,
+   --  else the principal's default, else full access (a principal with no
+   --  policy entry at all is unrestricted, preserving prior behavior).
+   function Effective_Role (AKID, Bucket : String) return Role is
+      Key : constant String := AKID & Character'Val (10) & Bucket;
+   begin
+      if Bucket /= "" and then Bucket_Roles.Contains (Key) then
+         return Bucket_Roles.Element (Key);
+      elsif Roles.Contains (AKID) then
+         return Roles.Element (AKID);
+      else
+         return Read_Write;
+      end if;
+   end Effective_Role;
 
    --  Multi-person approval (four-eyes) for destructive deletes. The threat is
    --  a privileged insider deleting backups; the mitigation is a co-signing
@@ -422,20 +461,53 @@ procedure Dezhan_Server is
       while not End_Of_File (F) loop
          declare
             Line : constant String := Get_Line (F);
-            Sp   : constant Natural := Index (Line, " ");
+            Toks : array (1 .. 64) of Unbounded_String :=
+              (others => Null_Unbounded_String);
+            NT   : Natural := 0;
+            I    : Natural := Line'First;
          begin
-            if Sp > 0 then
+            --  Split the line on spaces into tokens.
+            while I <= Line'Last loop
+               while I <= Line'Last and then Line (I) = ' ' loop
+                  I := I + 1;
+               end loop;
+               exit when I > Line'Last;
                declare
-                  Akid : constant String := Trim (Line (Line'First .. Sp - 1), Both);
-                  Rest : constant String := Trim (Line (Sp + 1 .. Line'Last), Both);
-                  Sp2  : constant Natural := Index (Rest, " ");
-                  Secret : constant String :=
-                    (if Sp2 = 0 then Rest else Trim (Rest (Rest'First .. Sp2 - 1), Both));
-                  Rl   : constant String :=
-                    (if Sp2 = 0 then "" else Trim (Rest (Sp2 + 1 .. Rest'Last), Both));
+                  J : Natural := I;
                begin
-                  Credentials.Include (Akid, Secret);
-                  Roles.Include (Akid, (if Rl = "ro" then Read_Only else Read_Write));
+                  while J <= Line'Last and then Line (J) /= ' ' loop
+                     J := J + 1;
+                  end loop;
+                  if NT < Toks'Last then
+                     NT := NT + 1;
+                     Toks (NT) := To_Unbounded_String (Line (I .. J - 1));
+                  end if;
+                  I := J;
+               end;
+            end loop;
+
+            --  "akid secret [default] [bucket:perm ...]"
+            if NT >= 2 then
+               declare
+                  Akid   : constant String := To_String (Toks (1));
+                  Deflt  : Role := Read_Write;
+               begin
+                  Credentials.Include (Akid, To_String (Toks (2)));
+                  for K in 3 .. NT loop
+                     declare
+                        T     : constant String := To_String (Toks (K));
+                        Colon : constant Natural := Index (T, ":");
+                     begin
+                        if Colon = 0 then
+                           Deflt := To_Role (T);
+                        else
+                           Bucket_Roles.Include
+                             (Akid & Character'Val (10) & T (T'First .. Colon - 1),
+                              To_Role (T (Colon + 1 .. T'Last)));
+                        end if;
+                     end;
+                  end loop;
+                  Roles.Include (Akid, Deflt);
                end;
             end if;
          end;
@@ -768,7 +840,7 @@ procedure Dezhan_Server is
    --  credential. Anonymous is allowed unless DEZHAN_REQUIRE_AUTH is set.
    function Check_Auth
      (Head, Method, Path, Payload_Hash : String;
-      Princ_Role : out Role) return Auth_Status
+      Princ_Role : out Role; Princ_Key : out Unbounded_String) return Auth_Status
    is
       A     : constant String := Header (Head, "Authorization");
       QPos  : constant Natural := Index (Path, "?");
@@ -807,6 +879,7 @@ procedure Dezhan_Server is
          then
             Princ_Role :=
               (if Roles.Contains (AKID) then Roles.Element (AKID) else Read_Write);
+            Princ_Key := To_Unbounded_String (AKID);
             return Valid;
          else
             return Invalid;
@@ -814,6 +887,7 @@ procedure Dezhan_Server is
       end Verify_Sig;
    begin
       Princ_Role := Read_Write;   --  default for anonymous / unset (overwritten on Valid)
+      Princ_Key  := Null_Unbounded_String;
       if A /= "" then
          if Index (A, "AWS4-HMAC-SHA256") = 0 then
             return Invalid;
@@ -1582,6 +1656,7 @@ procedure Dezhan_Server is
               or else (Path0'Length >= 6
                        and then Path0 (Path0'First .. Path0'First + 5) = "/admin");
             Princ_Role : Role := Read_Write;
+            Princ_Key  : Unbounded_String;
          begin
          if not Is_Control then
             declare
@@ -1590,9 +1665,14 @@ procedure Dezhan_Server is
                   then Header (Head, "x-amz-content-sha256")
                   else Dezhan.Sigv4.Hex_SHA256 (""));
                St : constant Auth_Status :=
-                 Check_Auth (Head, Method, Path, Payload_Hash, Princ_Role);
+                 Check_Auth (Head, Method, Path, Payload_Hash, Princ_Role, Princ_Key);
                Is_Write : constant Boolean :=
                  Method = "PUT" or else Method = "POST" or else Method = "DELETE";
+               --  Per-bucket access for an authenticated principal.
+               Eff : constant Role :=
+                 (if St = Valid
+                  then Effective_Role (To_String (Princ_Key), Bucket_Of (Path0))
+                  else Read_Write);
             begin
                if St = Missing then
                   Send_Text (Ch, "401 Unauthorized", "authentication required");
@@ -1600,8 +1680,13 @@ procedure Dezhan_Server is
                elsif St = Invalid then
                   Send_Text (Ch, "403 Forbidden", "invalid SigV4 signature");
                   return;
-               elsif St = Valid and then Princ_Role = Read_Only and then Is_Write then
-                  Send_Text (Ch, "403 Forbidden", "read-only credential");
+               elsif St = Valid and then Is_Write and then Eff /= Read_Write then
+                  Send_Text (Ch, "403 Forbidden",
+                    "credential not permitted to write this bucket");
+                  return;
+               elsif St = Valid and then not Is_Write and then Eff = No_Access then
+                  Send_Text (Ch, "403 Forbidden",
+                    "credential has no access to this bucket");
                   return;
                end if;
 
