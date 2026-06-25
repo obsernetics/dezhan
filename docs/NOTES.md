@@ -153,7 +153,12 @@ demo key is used at rest).
   dezhan can serve as a general-purpose S3 store. Post-MVP; immutability stays
   the headline. Both modes share the S3 API, storage engine, audit chain, and
   scrubbing; only Immutable buckets use the retention state machine.
-- Local auth realm, RBAC, quorum approvals, API tokens, service accounts.
+- Local auth realm with SigV4 credentials, RBAC (per-credential ro/rw), an
+  admin-token gate for the /admin control plane, and a synchronous four-eyes
+  delete quorum (DEZHAN_DELETE_QUORUM + DEZHAN_APPROVERS, X-Dezhan-Approvals
+  header). Asynchronous, staged approval workflows (request now, approvers
+  co-sign later across sessions) stay Phase 3; API tokens and service accounts
+  beyond the credential file are future.
 - Observability: structured (key=value) request logs, a `/healthz` endpoint, and
   Prometheus `/metrics` covering object count, storage bytes on disk, quarantined
   objects, audit length, scrub status (runs/corrupt/shards repaired), retention

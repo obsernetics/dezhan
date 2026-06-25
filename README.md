@@ -100,8 +100,18 @@ Standard S3, validated against the AWS SDK (boto3):
 | `DEZHAN_NEW_VAULT_KEY` | set to rotate the passphrase on startup | (unset) |
 | `DEZHAN_REQUIRE_AUTH` | reject unsigned requests when set | (unset = anonymous) |
 | `DEZHAN_ACCESS_KEY` / `DEZHAN_SECRET` | the S3 credential | `dezhanadmin` / demo secret |
-| `DEZHAN_CREDENTIALS` | extra `accesskey secret` lines, one per account | `<root>/credentials` |
+| `DEZHAN_CREDENTIALS` | extra `accesskey secret [ro\|rw]` lines, one per account | `<root>/credentials` |
+| `DEZHAN_ADMIN_TOKEN` | require this token (`X-Dezhan-Admin-Token`) for `/admin/*` | (unset = open) |
+| `DEZHAN_DELETE_QUORUM` | co-signatures required to delete (four-eyes) | `0` (disabled) |
+| `DEZHAN_APPROVERS` | comma-separated approver secrets for delete quorum | (unset) |
 | `DEZHAN_KDF_ITERS` | PBKDF2 work factor | `200000` |
+
+Credentials are read-write by default; append `ro` to make an account read-only
+(it may GET/HEAD/list but not PUT/POST/DELETE). When `DEZHAN_DELETE_QUORUM=N` is
+set, every delete (object, bucket, or batch) must carry at least `N` distinct
+approver secrets in the `X-Dezhan-Approvals` header (comma-separated), drawn from
+`DEZHAN_APPROVERS`. This is the synchronous four-eyes control; asynchronous,
+staged approval workflows are Phase 3.
 
 Server arguments: `dezhan_server [port] [data-dir]` (defaults `8080`,
 `/tmp/dezhan-vault`).

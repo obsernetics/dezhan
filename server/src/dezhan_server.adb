@@ -266,6 +266,72 @@ procedure Dezhan_Server is
    Roles       : Role_Maps.Map;
    Admin_Token : constant String := Env ("DEZHAN_ADMIN_TOKEN", "");
 
+   --  Multi-person approval (four-eyes) for destructive deletes. The threat is
+   --  a privileged insider deleting backups; the mitigation is a co-signing
+   --  quorum. Set DEZHAN_DELETE_QUORUM=N (default 0 = disabled) and the approver
+   --  secrets as a comma-separated DEZHAN_APPROVERS list. A delete then needs N
+   --  distinct approver secrets in the X-Dezhan-Approvals header (comma list).
+   --  This is the synchronous co-sign form; the asynchronous, staged approval
+   --  workflow remains Phase 3 (see docs/NOTES.md).
+   function Env_Nat (Name : String; Default : Natural) return Natural is
+      S : constant String := Env (Name, "");
+   begin
+      return (if S = "" then Default else Natural'Value (S));
+   exception
+      when others => return Default;
+   end Env_Nat;
+
+   Delete_Quorum : constant Natural := Env_Nat ("DEZHAN_DELETE_QUORUM", 0);
+   Approvers_Raw : constant String  := Env ("DEZHAN_APPROVERS", "");
+
+   --  Is Tok one of the comma-separated, space-trimmed elements of List?
+   function In_List (Tok, List : String) return Boolean is
+      I : Natural := List'First;
+   begin
+      if Tok = "" then
+         return False;
+      end if;
+      while I <= List'Last loop
+         declare
+            J : constant Natural := Index (List (I .. List'Last), ",");
+            E : constant String :=
+              Trim (List (I .. (if J = 0 then List'Last else J - 1)), Both);
+         begin
+            if E = Tok then
+               return True;
+            end if;
+            exit when J = 0;
+            I := J + 1;
+         end;
+      end loop;
+      return False;
+   end In_List;
+
+   --  Count distinct valid approver secrets presented in a comma-separated list.
+   function Approval_Count (Hdr : String) return Natural is
+      Count : Natural := 0;
+      Seen  : Unbounded_String := Null_Unbounded_String;
+      I     : Natural := Hdr'First;
+   begin
+      while I <= Hdr'Last loop
+         declare
+            J : constant Natural := Index (Hdr (I .. Hdr'Last), ",");
+            E : constant String :=
+              Trim (Hdr (I .. (if J = 0 then Hdr'Last else J - 1)), Both);
+         begin
+            if E /= "" and then In_List (E, Approvers_Raw)
+              and then not In_List (E, To_String (Seen))
+            then
+               Count := Count + 1;
+               Append (Seen, (if Seen = Null_Unbounded_String then E else "," & E));
+            end if;
+            exit when J = 0;
+            I := J + 1;
+         end;
+      end loop;
+      return Count;
+   end Approval_Count;
+
    --  Credentials file lines: "accesskey secret [ro|rw]" (default rw).
    procedure Load_Credentials (Path : String) is
       F : File_Type;
@@ -1453,6 +1519,22 @@ procedure Dezhan_Server is
                   return;
                elsif St = Valid and then Princ_Role = Read_Only and then Is_Write then
                   Send_Text (Ch, "403 Forbidden", "read-only credential");
+                  return;
+               end if;
+
+               --  Four-eyes: a destructive delete needs a co-signing quorum.
+               --  Destructive = DELETE on an object/bucket, or batch delete
+               --  (POST ...?delete).
+               if Delete_Quorum > 0
+                 and then (Method = "DELETE"
+                           or else (Method = "POST"
+                                    and then Index (PQuery, "delete") /= 0))
+                 and then Approval_Count (Header (Head, "X-Dezhan-Approvals"))
+                            < Delete_Quorum
+               then
+                  Send_Text (Ch, "403 Forbidden",
+                    "delete requires" & Natural'Image (Delete_Quorum)
+                    & " approver co-signatures");
                   return;
                end if;
             end;
