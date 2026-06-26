@@ -2,7 +2,7 @@
 # GNAT (no Alire needed; every .gpr pins -gnat2022), then ship only the
 # binaries on a distroless runtime so the image carries no shell or package
 # manager. Builder and runtime share the Debian 12 glibc.
-FROM debian:12-slim AS build
+FROM debian:13-slim AS build
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gnat gprbuild ca-certificates \
