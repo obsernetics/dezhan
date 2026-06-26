@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.0
 	github.com/container-storage-interface/spec v1.9.0
 	google.golang.org/grpc v1.62.1
-	google.golang.org/protobuf v1.32.0
+	google.golang.org/protobuf v1.36.11
 	k8s.io/klog/v2 v2.120.1
 	k8s.io/mount-utils v0.30.3
 )
