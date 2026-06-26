@@ -1,0 +1,57 @@
+version: 2
+# Weekly dependency update PRs for every ecosystem in the repo. The Ada/SPARK
+# trusted core has no external runtime dependencies (and Alire is not a
+# Dependabot ecosystem), so it is not listed here; the proof gate guards it.
+updates:
+  # GitHub Actions used by the workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies", "github-actions"]
+    open-pull-requests-limit: 5
+
+  # Go operator.
+  - package-ecosystem: gomod
+    directory: "/operator"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "operator"
+    labels: ["dependencies", "go"]
+    open-pull-requests-limit: 5
+
+  # Go CSI driver.
+  - package-ecosystem: gomod
+    directory: "/csi"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "csi"
+    labels: ["dependencies", "go"]
+    open-pull-requests-limit: 5
+
+  # Container base images.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "docker"
+    labels: ["dependencies", "docker"]
+  - package-ecosystem: docker
+    directory: "/operator"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "docker"
+    labels: ["dependencies", "docker"]
+  - package-ecosystem: docker
+    directory: "/csi"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "docker"
+    labels: ["dependencies", "docker"]
