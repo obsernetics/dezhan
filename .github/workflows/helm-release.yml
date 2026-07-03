@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.15.4
 
@@ -40,7 +40,7 @@ jobs:
           cp deploy/helm-index.html public/index.html
 
       - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: public
       - id: deploy
