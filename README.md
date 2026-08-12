@@ -7,15 +7,35 @@
 [![trusted-core coverage 95%](https://img.shields.io/badge/trusted--core%20coverage-95%25-brightgreen)](scripts/coverage.sh)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](#)
 
-On-prem, air-gapped, immutable backup vault that speaks S3. Point any S3 client
-(aws-cli, restic, Veeam, Velero, boto3) at it; data is content-addressed,
-encrypted, erasure-coded, and WORM-locked so it cannot be changed or deleted
-before its retention expires. The integrity core is formally verified in SPARK.
-An on-prem alternative to MinIO and Veeam.
+**An air-gapped, immutable backup vault that speaks S3, with its integrity rules
+formally proved rather than merely tested.**
+
+![dezhan storing an object under retention, then refusing to delete it](docs/demo.gif)
+
+Point any S3 client (aws-cli, restic, Veeam, Velero, boto3) at dezhan and your
+data is content-addressed, encrypted, erasure-coded, and WORM-locked: once an
+object is written under a retention it cannot be changed or deleted until that
+retention expires, and a tampered system clock cannot expire the lock early. It
+runs on-prem and offline, an alternative to MinIO and Veeam.
+
+What sets it apart is the last part. The retention state machine, clock guard,
+audit chain, and erasure coding are written in SPARK and checked by `gnatprove`
+on every commit (325 checks, 0 unproved). "A retained object cannot be deleted
+before expiry" is a machine-proved theorem here, not a test that might have gaps.
+
+### Why dezhan
+
+- **Immutable by proof.** WORM / Object Lock is enforced by a formally verified
+  state machine: retention can be extended, never shortened.
+- **Speaks S3.** A drop-in endpoint for the backup tools you already run, so
+  there is no new client to learn.
+- **Air-gapped.** Runs fully offline with no external runtime dependencies.
+- **Kubernetes-native.** An operator runs vaults from a custom resource, and a
+  CSI driver can expose a vault as PersistentVolumes.
 
 Three images are published to GHCR: `dezhan` (the vault server), `dezhan-operator`
 (runs vaults from a custom resource), and `dezhan-csi` (exposes a vault as
-PersistentVolumes). For a plain install you only need the server.
+PersistentVolumes). For a plain install you only need the server, below.
 
 ## Install
 
