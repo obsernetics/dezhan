@@ -1,0 +1,24 @@
+name: dependency-review
+
+# On every PR, inspect the dependency changes in the diff and fail if a bump
+# pulls in a known-vulnerable version or a disallowed license. This is the gate
+# that stops a bad dependency update (including a Dependabot one) from merging.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: review dependency changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # Copyleft licenses would contaminate the Apache-2.0 distribution.
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0, LGPL-3.0
+          comment-summary-in-pr: on-failure

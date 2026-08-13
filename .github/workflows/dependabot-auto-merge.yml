@@ -1,0 +1,91 @@
+name: dependabot-auto-merge
+
+# Auto-merge Dependabot PRs once every check on the head commit is green.
+#
+# Triggered on completion of the CI workflows (not the pull_request event) so
+# the job runs with a write-scoped GITHUB_TOKEN: Dependabot's own PR-event token
+# is read-only and cannot merge. Each CI workflow that finishes re-evaluates the
+# PR, so whichever check lands last is the one that performs the merge.
+#
+# Policy: patch and minor bumps merge automatically; a major bump is left open
+# and labelled for a human to review. Only same-repo Dependabot branches qualify.
+on:
+  workflow_run:
+    workflows: [ci, csi, operator]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  auto-merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - name: Resolve the open PR for this branch
+        id: pr
+        run: |
+          num=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+                  --json number --jq '.[0].number // empty')
+          if [ -z "$num" ]; then
+            echo "No open PR for $BRANCH; nothing to do."
+            exit 0
+          fi
+          echo "number=$num" >> "$GITHUB_OUTPUT"
+          title=$(gh pr view "$num" --repo "$REPO" --json title --jq .title)
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      - name: Require every check on the commit to be green
+        id: checks
+        if: steps.pr.outputs.number
+        run: |
+          # Pull every check run for the head commit. Merge only when all have
+          # finished and none failed; if anything is still running, bail quietly
+          # and let the next workflow completion re-evaluate.
+          mapfile -t rows < <(gh api --paginate \
+            "repos/$REPO/commits/$SHA/check-runs" \
+            --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')
+          pending=0 failed=0
+          for r in "${rows[@]}"; do
+            name=$(printf '%s' "$r" | cut -f1)
+            status=$(printf '%s' "$r" | cut -f2)
+            concl=$(printf '%s' "$r" | cut -f3)
+            [ "$status" != "completed" ] && { echo "pending: $name"; pending=1; continue; }
+            case "$concl" in
+              success|skipped|neutral) ;;
+              *) echo "not green: $name ($concl)"; failed=1 ;;
+            esac
+          done
+          if [ "$failed" = 1 ]; then echo "A check failed; will not merge."; exit 0; fi
+          if [ "$pending" = 1 ]; then echo "Checks still running; will retry later."; exit 0; fi
+          echo "green=1" >> "$GITHUB_OUTPUT"
+
+      - name: Classify bump (skip major)
+        id: semver
+        if: steps.checks.outputs.green
+        run: |
+          # Dependabot titles read "... bump <dep> from A.B.C to X.Y.Z ...".
+          title='${{ steps.pr.outputs.title }}'
+          from=$(printf '%s\n' "$title" | grep -oiE 'from [0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+          to=$(printf '%s\n' "$title"   | grep -oiE 'to [0-9]+'   | head -1 | grep -oE '[0-9]+' || true)
+          if [ -n "$from" ] && [ -n "$to" ] && [ "$to" -gt "$from" ]; then
+            echo "Major bump ($from -> $to); leaving for manual review."
+            echo "major=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Label major bumps for review
+        if: steps.checks.outputs.green && steps.semver.outputs.major
+        run: gh pr edit "${{ steps.pr.outputs.number }}" --repo "$REPO" --add-label "major-review" || true
+
+      - name: Merge (patch/minor)
+        if: steps.checks.outputs.green && !steps.semver.outputs.major
+        run: gh pr merge "${{ steps.pr.outputs.number }}" --repo "$REPO" --merge --delete-branch
