@@ -1,12 +1,17 @@
 name: helm-release
 
-# Package the Helm chart and publish it as a chart repository on GitHub Pages,
-# so users can `helm repo add dezhan https://obsernetics.github.io/dezhan`.
-# Requires Pages to be enabled with source "GitHub Actions" (Settings > Pages).
+# Publish the project landing page AND the Helm chart repository to GitHub Pages
+# at https://obsernetics.github.io/dezhan/ . The chart index.yaml stays at the
+# site root so `helm repo add dezhan https://obsernetics.github.io/dezhan` keeps
+# working. Requires Pages source "GitHub Actions" (Settings > Pages).
 on:
   push:
     branches: [ main ]
-    paths: [ "deploy/charts/**", "deploy/helm-index.html", ".github/workflows/helm-release.yml" ]
+    paths:
+      - "deploy/charts/**"
+      - "deploy/site/**"
+      - "docs/assets/demo.gif"
+      - ".github/workflows/helm-release.yml"
   workflow_dispatch:
 
 permissions:
@@ -31,13 +36,16 @@ jobs:
         with:
           version: v3.15.4
 
-      - name: Package chart and build the repo index
+      - name: Build the site and the chart repo index
         run: |
           BASE="https://obsernetics.github.io/dezhan"
-          mkdir -p public
+          mkdir -p public/assets
+          # 1) Helm chart repository at the site root (keeps the repo add URL).
           helm package deploy/charts/dezhan -d public
           helm repo index public --url "$BASE"
-          cp deploy/helm-index.html public/index.html
+          # 2) Landing page + its assets (css/js/icon), then the demo GIF.
+          cp -r deploy/site/. public/
+          cp docs/assets/demo.gif public/assets/demo.gif
 
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

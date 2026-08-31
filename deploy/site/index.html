@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dezhan - Provable-Immutability Backup Vault</title>
+    <meta name="description" content="dezhan is an air-gapped, immutable backup vault that speaks S3. Objects written under a retention cannot be deleted before they expire, enforced by a state machine that is machine-checked with SPARK / gnatprove.">
+    <meta name="theme-color" content="#0b1020">
+
+    <meta property="og:title" content="dezhan - Provable-Immutability Backup Vault">
+    <meta property="og:description" content="Write-once backups whose immutability is a machine-checked theorem, not a configuration flag. Speaks S3, runs air-gapped, proved with SPARK.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://obsernetics.github.io/dezhan/">
+    <meta property="og:image" content="https://obsernetics.github.io/dezhan/assets/demo.gif">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="dezhan - Provable-Immutability Backup Vault">
+    <meta name="twitter:description" content="Backups that cannot be deleted before they expire - and a proof, not a setting, is why.">
+    <meta name="twitter:image" content="https://obsernetics.github.io/dezhan/assets/demo.gif">
+
+    <link rel="icon" type="image/svg+xml" href="assets/dezhan-icon.svg">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="assets/css/main.css?v=1">
+
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+</head>
+<body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <nav class="navbar">
+        <div class="container">
+            <a href="#top" class="nav-brand">
+                <img src="assets/dezhan-icon.svg" alt="" class="nav-logo" aria-hidden="true">
+                <span>dezhan</span>
+            </a>
+            <div class="nav-links">
+                <a href="#why" class="nav-link">Why</a>
+                <a href="#proof" class="nav-link">Proof</a>
+                <a href="#architecture" class="nav-link">Architecture</a>
+                <a href="#install" class="nav-link">Install</a>
+                <a href="https://github.com/obsernetics/dezhan" class="nav-link nav-github" target="_blank" rel="noopener">GitHub &#8599;</a>
+            </div>
+            <button class="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+        </div>
+    </nav>
+
+    <main id="main">
+    <header class="hero" id="top">
+        <div class="hero-glow" aria-hidden="true"></div>
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <span class="badge"><span class="badge-dot"></span> Ada 2022 / SPARK &middot; provable immutability</span>
+                </div>
+                <h1 class="hero-title">
+                    Backups that <span class="text-gradient">cannot be deleted</span> before they expire
+                </h1>
+                <p class="hero-description">
+                    dezhan is an air-gapped, immutable backup vault that speaks S3. Write an object
+                    under a retention and the vault refuses to delete or expire it early - and
+                    "refuses" is a state machine <em>proved</em> with <code>gnatprove</code> to have
+                    no path that deletes a retained object.
+                </p>
+                <div class="hero-actions">
+                    <a href="#install" class="btn btn-primary">Quick Start</a>
+                    <a href="https://github.com/obsernetics/dezhan" class="btn btn-outline" target="_blank" rel="noopener">
+                        <svg width="18" height="18" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+                        </svg>
+                        View on GitHub
+                    </a>
+                </div>
+                <ul class="hero-meta" aria-label="At a glance">
+                    <li>S3-compatible</li>
+                    <li>Air-gapped</li>
+                    <li>SPARK-proved</li>
+                    <li>Kubernetes-native</li>
+                </ul>
+            </div>
+            <div class="hero-visual">
+                <figure class="demo-figure">
+                    <img src="assets/demo.gif" alt="dezhan demo: an object is stored under a retention lock, every attempt to delete it before expiry is refused, and only an object whose retention has elapsed is deleted" width="820" height="auto" loading="eager">
+                    <figcaption>Store under retention, then watch every delete-before-expiry be refused.</figcaption>
+                </figure>
+            </div>
+        </div>
+    </header>
+
+    <!-- WHY -->
+    <section id="why" class="section why">
+        <div class="container">
+            <div class="section-header">
+                <span class="eyebrow">Why dezhan</span>
+                <h2>Most vaults promise immutability. dezhan proves it.</h2>
+                <p>
+                    The modern ransomware playbook deletes the backups first, then encrypts. WORM and
+                    Object Lock exist to stop that - but only if the enforcement itself cannot be
+                    turned off. dezhan makes that enforcement a machine-checked theorem.
+                </p>
+            </div>
+            <div class="why-grid">
+                <article class="why-card">
+                    <div class="why-icon">01</div>
+                    <h3>Provable, not configurable</h3>
+                    <p>
+                        The retention rule is a SPARK state machine, and <code>gnatprove</code>
+                        discharges every path on every commit: 325 checks, 0 unproved. "Immutable" is
+                        a property of the build, not a promise in a datasheet.
+                    </p>
+                </article>
+                <article class="why-card">
+                    <div class="why-icon">02</div>
+                    <h3>Speaks S3</h3>
+                    <p>
+                        Point <code>aws-cli</code>, <code>restic</code>, Veeam, Velero, or
+                        <code>boto3</code> at the endpoint. Buckets, versioning, multipart, presigned
+                        URLs, SigV4, and Object Lock / WORM with legal hold - validated against the AWS SDK.
+                    </p>
+                </article>
+                <article class="why-card">
+                    <div class="why-icon">03</div>
+                    <h3>Air-gapped &amp; self-verifying</h3>
+                    <p>
+                        No external runtime dependency. Data is content-addressed, encrypted, and
+                        erasure-coded; a background scrub verifies and self-heals, and every operation
+                        is written to an append-only, hash-chained audit log.
+                    </p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- PROOF -->
+    <section id="proof" class="section compare">
+        <div class="container">
+            <div class="section-header">
+                <span class="eyebrow">What it proves</span>
+                <h2>Four invariants, machine-checked on every commit</h2>
+                <p>
+                    The trusted core is written in SPARK. Each row below is expressed as a contract
+                    and discharged by <code>gnatprove</code> - the CI job fails on a single unproved
+                    check. Not tested. Proved.
+                </p>
+            </div>
+            <div class="table-wrap">
+                <table class="compare-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Verified component</th>
+                            <th scope="col">Invariant it guarantees</th>
+                            <th scope="col" class="col-highlight">How</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <th scope="row"><code>retention state machine</code></th>
+                            <td>Retention may be extended, never shortened; a retained object cannot be deleted before expiry</td>
+                            <td class="col-highlight"><strong>SPARK contracts</strong>, discharged by gnatprove</td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><code>clock-integrity guard</code></th>
+                            <td>A rewound or tampered system clock cannot expire a lock; the vault seals instead of releasing</td>
+                            <td class="col-highlight"><strong>proved</strong> monotonic trusted time</td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><code>append-only audit chain</code></th>
+                            <td>Every operation is hash-chained; recorded history cannot be rewritten undetectably</td>
+                            <td class="col-highlight"><strong>proved</strong> append-only structure</td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><code>erasure coding</code></th>
+                            <td>Data survives drive loss and reconstructs exactly, or is quarantined - never returned wrong</td>
+                            <td class="col-highlight"><strong>proved</strong> reconstruction</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="qs-note">
+                The cryptography - SHA-256/512, ChaCha20, HMAC, Ed25519 - is implemented in-tree with
+                no external runtime dependency, so the whole integrity path is auditable in one place.
+            </p>
+        </div>
+    </section>
+
+    <!-- ARCHITECTURE -->
+    <section id="architecture" class="section requirements">
+        <div class="container">
+            <div class="section-header">
+                <span class="eyebrow">Architecture</span>
+                <h2>A single writer, formally guarded</h2>
+                <p>
+                    A vault is one writer over durable storage - a single-replica StatefulSet on a
+                    <code>ReadWriteOnce</code> volume. The immutability and audit-chain guarantees
+                    assume one writer; cross-node durability comes from the StorageClass beneath it.
+                </p>
+            </div>
+            <div class="req-grid">
+                <div class="req-card">
+                    <h3>Three images, one code base</h3>
+                    <ul>
+                        <li><strong><code>dezhan</code></strong> - the vault server. For a plain install this is all you need.</li>
+                        <li><strong><code>dezhan-operator</code></strong> - reconciles a <code>DezhanVault</code> CR into a StatefulSet, Service, PVC, and PodDisruptionBudget.</li>
+                        <li><strong><code>dezhan-csi</code></strong> - exposes a vault as PersistentVolumes, one bucket per PVC, via mountpoint-s3.</li>
+                    </ul>
+                </div>
+                <div class="req-card">
+                    <h3>Measured, not asserted</h3>
+                    <p>
+                        The proof gate (<code>scripts/prove.sh</code>) fails the build on any unproved
+                        check. Throughput is measured against MinIO across a 3-node k3s cluster and an
+                        on-prem VM; dezhan trades write speed for durability and stays within a small
+                        factor on GET.
+                    </p>
+                    <a class="btn btn-outline btn-sm" href="https://github.com/obsernetics/dezhan/tree/main/bench" target="_blank" rel="noopener">Benchmark harness &amp; results &#8599;</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section id="install" class="section quickstart">
+        <div class="container">
+            <div class="section-header">
+                <span class="eyebrow">Install</span>
+                <h2>Three ways to run dezhan</h2>
+                <p>
+                    One on-prem binary, a Helm chart for the Kubernetes operator, or the image from
+                    GHCR. For a plain install you only need the server.
+                </p>
+            </div>
+            <div class="qs-grid">
+                <div class="qs-col">
+                    <h3>On-prem (one command)</h3>
+                    <div class="code-block">
+                        <pre><code class="language-bash">curl --proto '=https' --tlsv1.2 -sSf \
+  https://raw.githubusercontent.com/obsernetics/dezhan/main/install.sh | sh</code></pre>
+                    </div>
+                    <h3>Helm (Kubernetes operator)</h3>
+                    <div class="code-block">
+                        <pre><code class="language-bash">helm repo add dezhan https://obsernetics.github.io/dezhan
+helm repo update
+helm install dezhan dezhan/dezhan</code></pre>
+                    </div>
+                    <h3>Container image (GHCR)</h3>
+                    <div class="code-block">
+                        <pre><code class="language-bash">docker pull ghcr.io/obsernetics/dezhan:latest</code></pre>
+                    </div>
+                </div>
+                <div class="qs-col">
+                    <h3>Declare a vault</h3>
+                    <div class="code-block">
+                        <pre><code class="language-yaml">apiVersion: dezhan.obsernetics.io/v1alpha1
+kind: DezhanVault
+metadata:
+  name: my-vault
+spec:
+  storage: 100Gi
+  requireAuth: true
+  deleteQuorum: 2                # deletes need 2 co-signatures
+  secretName: my-vault-secrets   # DEZHAN_VAULT_KEY, DEZHAN_SECRET, ...</code></pre>
+                    </div>
+                    <p class="qs-note">
+                        Reach the vault in-cluster at
+                        <code>http://my-vault.&lt;namespace&gt;.svc:8080</code>, then point any S3
+                        client at it. Enabling Object Lock on a bucket makes it Immutable / WORM.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="section cta">
+        <div class="container">
+            <div class="cta-box">
+                <h2>Immutability you can prove.</h2>
+                <p>Write once, keep it honest: the delete-before-expiry path is machine-checked unreachable.</p>
+                <div class="hero-actions">
+                    <a href="https://github.com/obsernetics/dezhan" class="btn btn-primary" target="_blank" rel="noopener">Get started on GitHub</a>
+                    <a href="#install" class="btn btn-outline">Read the quick start</a>
+                </div>
+            </div>
+        </div>
+    </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <a href="#top" class="nav-brand">
+                        <img src="assets/dezhan-icon.svg" alt="" class="footer-logo" aria-hidden="true">
+                        <span>dezhan</span>
+                    </a>
+                    <p>An air-gapped, immutable backup vault that speaks S3. Its integrity core is formally verified with SPARK / gnatprove - not merely tested.</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-section">
+                        <h4>Project</h4>
+                        <a href="https://github.com/obsernetics/dezhan" target="_blank" rel="noopener">GitHub</a>
+                        <a href="https://github.com/obsernetics/dezhan/releases" target="_blank" rel="noopener">Releases</a>
+                        <a href="https://github.com/obsernetics/dezhan/blob/main/LICENSE" target="_blank" rel="noopener">License (Apache 2.0)</a>
+                    </div>
+                    <div class="footer-section">
+                        <h4>Docs</h4>
+                        <a href="https://github.com/obsernetics/dezhan#readme" target="_blank" rel="noopener">README</a>
+                        <a href="https://github.com/obsernetics/dezhan/blob/main/docs/NOTES.md" target="_blank" rel="noopener">Design notes</a>
+                        <a href="https://github.com/obsernetics/dezhan/tree/main/bench" target="_blank" rel="noopener">Benchmarks</a>
+                    </div>
+                    <div class="footer-section">
+                        <h4>Community</h4>
+                        <a href="https://github.com/obsernetics/dezhan/issues" target="_blank" rel="noopener">Issues</a>
+                        <a href="https://github.com/obsernetics/dezhan/discussions" target="_blank" rel="noopener">Discussions</a>
+                        <a href="https://github.com/obsernetics/dezhan/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; <span id="year">2026</span> dezhan &middot; Licensed under Apache 2.0</p>
+                <p class="footer-tagline">Write once. Delete never - until it expires.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script src="assets/js/main.js?v=1"></script>
+</body>
+</html>
