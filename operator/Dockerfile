@@ -1,5 +1,5 @@
 # dezhan operator image. Standard Go multi-stage build on distroless static.
-FROM golang:1.26 AS build
+FROM golang:1.27 AS build
 WORKDIR /workspace
 
 COPY go.mod go.mod
