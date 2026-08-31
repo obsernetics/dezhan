@@ -498,9 +498,28 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
       return Object_Id
    is
       Orig_Len : constant Natural := Natural (Data'Length);
-      --  Compress the whole object first; keep the smaller of deflate/stored.
-      Comp     : constant Deflate.Buffer := Deflate.Deflate (To_Defl (Data));
-      Compress : constant Boolean := Comp'Length < Orig_Len;
+      --  Compression is opt-in and only kept when it actually helps. Media,
+      --  archives and already-compressed or encrypted uploads do not shrink, and
+      --  running DEFLATE over the whole object is pure overhead for them. So
+      --  probe a small prefix first and only spend the full compressor when the
+      --  probe shows a real gain; otherwise store the object as-is.
+      Probe_N  : constant Natural := Natural'Min (Orig_Len, 131072);
+      Probe    : constant Deflate.Buffer :=
+        Deflate.Deflate
+          (To_Defl (Data (Data'First
+                          .. Data'First + Stream_Element_Offset (Probe_N) - 1)));
+      --  If even the prefix does not shrink, the data is incompressible (media,
+      --  archives, ciphertext) and the original code would have stored it as-is
+      --  too; skip the full pass. If the prefix shrinks at all, run the full
+      --  compressor and keep it only when it beats storing raw, exactly as
+      --  before.
+      Worth    : constant Boolean := Probe_N > 0 and then Probe'Length < Probe_N;
+      --  Reuse the probe when it already covered the whole object.
+      Comp     : constant Deflate.Buffer :=
+        (if not Worth then Probe
+         elsif Probe_N = Orig_Len then Probe
+         else Deflate.Deflate (To_Defl (Data)));
+      Compress : constant Boolean := Worth and then Comp'Length < Orig_Len;
       EK       : constant Key_256 := Subkey (Key, Enc_Label);
       MK       : constant Key_256 := Subkey (Key, Mac_Label);
    begin
