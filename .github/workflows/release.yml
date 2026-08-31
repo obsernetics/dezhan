@@ -1,13 +1,22 @@
 name: release
 
-# On a v* tag: build statically-linked binaries, package the Helm chart at the
-# tag version, generate a CycloneDX SBOM, and publish a GitHub Release with an
-# automatically generated changelog. The container images are published at the
-# same version by image.yml (semver tags). The SPARK proof gate (ci.yml) should
-# already be green for the commit being tagged.
+# Build statically-linked binaries, package the Helm chart at the release
+# version, generate a CycloneDX SBOM, and publish a GitHub Release with an
+# automatically generated changelog. Container images are published at the same
+# version by image.yml.
+#
+# Two ways in: a manual `v*` tag push, or a reusable call from auto-release.yml
+# (which passes the computed version and only fires when the shipped artifacts
+# actually changed and CI is green).
 on:
   push:
     tags: [ "v*" ]
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version without leading v (e.g. 1.0.1). Empty = take it from the pushed tag."
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -19,6 +28,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history for changelog generation
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VER="${{ inputs.version }}"
+          [ -z "$VER" ] && VER="${GITHUB_REF_NAME#v}"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VER"
 
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
@@ -43,15 +60,17 @@ jobs:
 
       - name: Package Helm chart at the release version
         run: |
-          VER="${GITHUB_REF_NAME#v}"
+          VER="${{ steps.ver.outputs.ver }}"
           helm package deploy/charts/dezhan --version "$VER" --app-version "$VER" -d dist
 
       - name: Generate SBOM
-        run: sh scripts/sbom.sh "${GITHUB_REF_NAME#v}" > dist/dezhan.cdx.json
+        run: sh scripts/sbom.sh "${{ steps.ver.outputs.ver }}" > dist/dezhan.cdx.json
 
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: v${{ steps.ver.outputs.ver }}
+          name: v${{ steps.ver.outputs.ver }}
           generate_release_notes: true   # automatic changelog from commits/PRs
           files: |
             dist/dezhan_server

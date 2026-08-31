@@ -6,6 +6,12 @@ on:
   push:
     branches: [ main ]
     tags: [ "v*" ]
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to tag the images with (e.g. 1.0.1). Set by auto-release.yml."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -44,6 +50,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
