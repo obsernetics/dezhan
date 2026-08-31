@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1010 372" width="1010" height="372" font-family="Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="Object lifecycle: an object written under a retention becomes a proved invariant. Reads and expired deletes are OK; deleting a retained object is DENIED; a rolled-forward clock leaves the vault SEALED.">
+  <defs>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5aa2ff"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5aa2ff"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <marker id="ah" markerWidth="12" markerHeight="12" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0.5,0.5 L9,5 L0.5,9.5" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <!-- card -->
+  <rect x="1" y="1" width="1008" height="370" rx="18" fill="#0b1020" stroke="#20293f" stroke-width="1.5"/>
+
+  <!-- title -->
+  <text x="505" y="42" text-anchor="middle" font-size="20" font-weight="700" fill="#e6ebf5">Write once, then every destroying path is refused</text>
+  <text x="505" y="64" text-anchor="middle" font-size="12.5" font-weight="600" letter-spacing="2" fill="#7f8aa3">OBJECT&#160;&#160;LIFECYCLE</text>
+
+  <!-- LEFT PANEL: WRITE -->
+  <g font-family="'JetBrains Mono','SF Mono', SFMono-Regular, Consolas, monospace">
+    <rect x="30" y="92" width="372" height="236" rx="14" fill="#111a30" stroke="#26314c" stroke-width="1.3"/>
+    <text x="52" y="126" font-family="Inter, system-ui, sans-serif" font-size="12.5" font-weight="700" letter-spacing="2.5" fill="url(#acc)">WRITE</text>
+
+    <text x="52" y="168" font-size="16.5" fill="#cbd5e1">put report</text>
+    <text x="380" y="168" text-anchor="end" font-size="16.5" fill="#8b96ad">7d lock</text>
+
+    <text x="52" y="204" font-size="16.5" fill="#cbd5e1">put audit</text>
+    <text x="380" y="204" text-anchor="end" font-size="16.5" fill="#8b96ad">7d lock</text>
+
+    <line x1="52" y1="226" x2="380" y2="226" stroke="#26314c" stroke-width="1"/>
+    <text x="52" y="262" font-size="16.5" fill="#cbd5e1">mode = compliance</text>
+    <text x="52" y="296" font-family="Inter, system-ui, sans-serif" font-size="13" fill="#6f7b93">retention: extend-only, never shortened</text>
+  </g>
+
+  <!-- ARROW -->
+  <g>
+    <text x="519" y="196" text-anchor="middle" font-size="14" font-weight="600" fill="#aeb8cd">becomes</text>
+    <line x1="416" y1="210" x2="614" y2="210" stroke="url(#arrow)" stroke-width="3.5" stroke-linecap="round" marker-end="url(#ah)"/>
+    <text x="519" y="236" text-anchor="middle" font-size="12.5" fill="#7f8aa3">a proved invariant</text>
+  </g>
+
+  <!-- RIGHT PANEL: ENFORCEMENT -->
+  <g font-family="'JetBrains Mono','SF Mono', SFMono-Regular, Consolas, monospace">
+    <rect x="636" y="92" width="372" height="236" rx="14" fill="#111a30" stroke="#26314c" stroke-width="1.3"/>
+    <text x="658" y="126" font-family="Inter, system-ui, sans-serif" font-size="12.5" font-weight="700" letter-spacing="2.5" fill="url(#acc)">ENFORCEMENT</text>
+
+    <!-- rows: command + status chip (right edge at 986) -->
+    <!-- get report : ok -->
+    <text x="658" y="163" font-size="15.5" fill="#cbd5e1">get report</text>
+    <rect x="936" y="149" width="50" height="21" rx="10.5" fill="#12331f" stroke="#2f7d4f"/>
+    <text x="961" y="164" text-anchor="middle" font-family="Inter, sans-serif" font-size="12.5" font-weight="700" fill="#4ade80">ok</text>
+
+    <!-- del report : DENIED -->
+    <text x="658" y="197" font-size="15.5" fill="#cbd5e1">del report</text>
+    <rect x="906" y="183" width="80" height="21" rx="10.5" fill="#34161a" stroke="#8a3a41"/>
+    <text x="946" y="198" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" letter-spacing="0.5" fill="#f87171">DENIED</text>
+
+    <!-- del audit : DENIED -->
+    <text x="658" y="231" font-size="15.5" fill="#cbd5e1">del audit</text>
+    <rect x="906" y="217" width="80" height="21" rx="10.5" fill="#34161a" stroke="#8a3a41"/>
+    <text x="946" y="232" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" letter-spacing="0.5" fill="#f87171">DENIED</text>
+
+    <!-- clock rolled forward : SEALED -->
+    <text x="658" y="265" font-size="15.5" fill="#cbd5e1">clock rolled forward</text>
+    <rect x="908" y="251" width="78" height="21" rx="10.5" fill="#33270c" stroke="#8a6a2a"/>
+    <text x="947" y="266" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" letter-spacing="0.5" fill="#fbbf24">SEALED</text>
+
+    <line x1="658" y1="283" x2="986" y2="283" stroke="#26314c" stroke-width="1"/>
+
+    <!-- del scratch (expired) : ok -->
+    <text x="658" y="311" font-size="15.5" fill="#cbd5e1">del scratch <tspan fill="#6f7b93">(expired)</tspan></text>
+    <rect x="936" y="297" width="50" height="21" rx="10.5" fill="#12331f" stroke="#2f7d4f"/>
+    <text x="961" y="312" text-anchor="middle" font-family="Inter, sans-serif" font-size="12.5" font-weight="700" fill="#4ade80">ok</text>
+  </g>
+</svg>

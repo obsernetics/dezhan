@@ -35,17 +35,10 @@ admin flag can turn off. It is a small state machine whose single job is
 **proved**, with `gnatprove`, to have no execution path that deletes a retained
 object.
 
-```
-  write                                      enforcement
- ┌────────────────────────┐               ┌──────────────────────────────┐
- │ put report   7d lock   │               │ get report             ok     │
- │ put audit    7d lock   │   becomes     │ del report             DENIED │
- │ mode = compliance      │──────────────▶│ del audit              DENIED │
- │                        │   a proved    │ clock rolled forward   SEALED │
- │                        │   invariant   │ ──────────────────────────────│
- │                        │               │ del scratch (expired)  ok     │
- └────────────────────────┘               └──────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/assets/lifecycle.svg" width="900"
+       alt="Object lifecycle: an object written under a retention becomes a proved invariant - reads and expired deletes are OK, deleting a retained object is DENIED, and a rolled-forward clock leaves the vault SEALED.">
+</p>
 
 It speaks S3, so nothing about your existing backup tooling has to change: point
 `aws-cli`, `restic`, Veeam, Velero, or `boto3` at it. It runs on-prem and fully
