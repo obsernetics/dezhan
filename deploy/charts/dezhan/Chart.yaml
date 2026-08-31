@@ -2,9 +2,9 @@ apiVersion: v2
 name: dezhan
 description: Immutable, air-gapped, S3-compatible backup vault operator
 type: application
-version: 0.1.0
-appVersion: "1.0"
-home: https://github.com/obsernetics/dezhan
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://obsernetics.github.io/dezhan/
 sources:
   - https://github.com/obsernetics/dezhan
 keywords:
