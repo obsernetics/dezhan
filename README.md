@@ -81,8 +81,11 @@ not a mode the whole system is stuck in.
 
 The other cost is throughput. Every write is `fsync`'d, erasure-coded, and
 encrypted before it is acknowledged, so `PUT` is slower than a plain object
-store. GET stays within a small factor. The numbers are in [`bench/`](bench/)
-and summarized under [Measured, not asserted](#measured-not-asserted).
+store. Compression is probed on a small prefix and skipped when it would not
+help, so already-compressed uploads (media, archives, encrypted blobs) are not
+slowed by a futile DEFLATE pass over data that will be stored as-is anyway. GET
+stays within a small factor. The numbers are in [`bench/`](bench/) and
+summarized under [Measured, not asserted](#measured-not-asserted).
 
 ## What it proves
 
