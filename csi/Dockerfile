@@ -1,6 +1,6 @@
 # dezhan CSI driver image. The node plugin shells out to mountpoint-s3
 # (mount-s3), so the runtime image bundles it plus FUSE.
-FROM golang:1.26 AS build
+FROM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
