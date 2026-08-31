@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.7
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.34
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.106.4
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.3
 	github.com/container-storage-interface/spec v1.13.0
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12
