@@ -12,6 +12,13 @@ on:
       - "deploy/site/**"
       - "docs/assets/demo.gif"
       - ".github/workflows/helm-release.yml"
+  # A release changes the version the site tells people to install.
+  release:
+    types: [ published ]
+  # Weekly, so a source that changed without matching a path filter - or a
+  # deploy that failed and was forgotten - is corrected within seven days.
+  schedule:
+    - cron: "17 6 * * 1"
   workflow_dispatch:
 
 permissions:
