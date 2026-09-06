@@ -35,6 +35,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Stamp the version into the sources for a versioned build (a reusable
+      # call from auto-release, or a manual v* tag push) so the image reports
+      # its real version. Plain main pushes (the `latest` image) are left as-is.
+      - name: Resolve version to stamp
+        id: sv
+        run: |
+          VER="${{ inputs.version }}"
+          if [ -z "$VER" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+          fi
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+      - name: Stamp the release version into the sources
+        if: steps.sv.outputs.ver != ''
+        run: sh scripts/stamp-version.sh "${{ steps.sv.outputs.ver }}"
+
       - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR

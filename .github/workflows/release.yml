@@ -37,6 +37,9 @@ jobs:
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           echo "Releasing v$VER"
 
+      - name: Stamp the release version into the sources
+        run: sh scripts/stamp-version.sh "${{ steps.ver.outputs.ver }}"
+
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
 
