@@ -81,11 +81,13 @@ not a mode the whole system is stuck in.
 
 The other cost is throughput. Every write is `fsync`'d, erasure-coded, and
 encrypted before it is acknowledged, so `PUT` is slower than a plain object
-store. Compression is probed on a small prefix and skipped when it would not
-help, so already-compressed uploads (media, archives, encrypted blobs) are not
-slowed by a futile DEFLATE pass over data that will be stored as-is anyway. GET
-stays within a small factor. The numbers are in [`bench/`](bench/) and
-summarized under [Measured, not asserted](#measured-not-asserted).
+store. The per-chunk encrypt, hash and erasure-code work is spread across the
+CPUs, so a large object scales with the core count, and objects of any size are
+stored (split into parts under the hood). Compression is probed on a small
+prefix and skipped when it would not help, so already-compressed uploads (media,
+archives, encrypted blobs) are not slowed by a futile DEFLATE pass. GET stays
+within a small factor. The numbers are in [`bench/`](bench/) and summarized
+under [Measured, not asserted](#measured-not-asserted).
 
 ## What it proves
 
@@ -191,11 +193,17 @@ check**, so the mandatory invariants stay machine-proved on every commit.
 [`scripts/coverage.sh`](scripts/coverage.sh) holds trusted-core line coverage,
 and [`scripts/test.sh`](scripts/test.sh) runs the unit suite.
 
-Throughput is measured the same way — against MinIO as a reference across a
+Throughput is measured the same way, against MinIO as a reference across a
 3-node k3s cluster and an on-prem VM. dezhan trades write speed for durability
 and integrity, so it is slower than MinIO on `PUT` and within a small factor on
 `GET`. Harness, raw results, and tables: [`bench/`](bench/)
 (`bench/results/COMPARISON.md`).
+
+The committed figures predate the parallel-chunk PUT work and the large-object
+fix. Since then, large-object (4 MiB and up) PUT throughput is roughly 3x higher
+and single objects past a few tens of MB store and restore correctly;
+small-object rates are fsync-bound and unchanged. Re-run `bench/s3bench.py` to
+refresh the tables and `bench/graph.py` for the chart.
 
 ![dezhan vs MinIO/Longhorn](bench/dezhan-vs-others.svg)
 

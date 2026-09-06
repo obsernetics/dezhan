@@ -6,6 +6,12 @@ Numbers are objects/s and MB/s (higher = better); p95 latency in ms (lower = bet
 dezhan is single-writer with per-write fsync + erasure coding + per-object encryption;
 MinIO is included as an S3 throughput reference. Longhorn = dezhan on a Longhorn PV.
 
+> Note: these figures predate the parallel-chunk PUT work and the large-object
+> fix. Since then, large-object (4 MiB and up) PUT throughput is roughly 3x
+> higher (about 2.2 to 8 MB/s on the on-prem VM) and single objects past a few
+> tens of MB store and restore correctly. Small-object rates are fsync-bound and
+> unchanged. Re-run `s3bench.py` and `graph.py` to refresh.
+
 ## PUT obj/s
 | size | dezhan-k8s | minio-k8s | dezhan-longhorn | dezhan-onprem |
 |---|---|---|---|---|
