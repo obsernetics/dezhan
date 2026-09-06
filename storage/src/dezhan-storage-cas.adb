@@ -1,4 +1,6 @@
 with Interfaces;                  use Interfaces;
+with Ada.Exceptions;
+with System.Multiprocessors;
 with Ada.Strings;                 use Ada.Strings;
 with Ada.Strings.Fixed;           use Ada.Strings.Fixed;
 with Ada.Directories;             use Ada.Directories;
@@ -39,8 +41,11 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
 
    --  ChaCha20 counter base for chunk C: 4096-byte chunks are 64 keystream
    --  blocks, so each chunk gets a disjoint keystream range.
+   --  ChaCha20 counter base for chunk C: a chunk is Chunk_Size/64 keystream
+   --  blocks, so consecutive chunks occupy disjoint counter ranges. Derived
+   --  from Chunk_Size so the two stay consistent.
    function Counter_For (C : Natural) return Unsigned_32 is
-     (Unsigned_32 (C) * 64);
+     (Unsigned_32 (C) * Unsigned_32 (Chunk_Size / 64));
 
    --  Per-object nonce, derived (convergent) so identical content under the
    --  same key yields the same nonce, hence the same ciphertext and object id
@@ -538,6 +543,37 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
          declare
             Manifest : Byte_Array (0 .. Hdr + N_Chunks * 32 - 1) :=
               (others => 0);
+
+            --  Encrypt, content-address and erasure-code one chunk, recording
+            --  its cipher-text digest in the manifest. Chunks are independent:
+            --  each uses a distinct ChaCha20 counter (so distinct cipher text
+            --  and a distinct content directory) and writes a disjoint manifest
+            --  slot, so several may run at once.
+            procedure Do_Chunk (C : Natural) is
+               First : constant Stream_Element_Offset :=
+                 Payload'First + Stream_Element_Offset (C * Chunk_Size);
+               Last  : Stream_Element_Offset :=
+                 First + Stream_Element_Offset (Chunk_Size) - 1;
+            begin
+               if Last > Payload'Last then
+                  Last := Payload'Last;
+               end if;
+               declare
+                  Bytes : Byte_Array := To_Bytes (Payload (First .. Last));
+               begin
+                  --  Encrypt at source, then address and store cipher text.
+                  XCrypt (EK, Nonce, Counter_For (C), Bytes);
+                  declare
+                     CD  : constant Digest    := SHA256 (Bytes);
+                     Hex : constant Object_Id := To_Hex (CD);
+                  begin
+                     Store_Shards (Object_Path (Root, Hex), To_Stream (Bytes));
+                     for I in 0 .. 31 loop
+                        Manifest (Hdr + C * 32 + I) := CD (I);
+                     end loop;
+                  end;
+               end;
+            end Do_Chunk;
          begin
             Put_U64 (Manifest, 0, Unsigned_64 (P_Len));
             Put_U64 (Manifest, 8, Unsigned_64 (Orig_Len));
@@ -546,34 +582,95 @@ package body Dezhan.Storage.Cas with SPARK_Mode => Off is
                Manifest (Nonce_Off + I) := Nonce (I);
             end loop;
 
-            for C in 0 .. N_Chunks - 1 loop
+            --  Encrypt/hash/erasure-code the chunks. This is CPU-bound, so a
+            --  multi-chunk object is spread across the CPUs; a tiny object stays
+            --  sequential to avoid task start-up cost. Durability is unchanged:
+            --  shard writes land in the page cache here and the fsync barrier is
+            --  still the journal commit in the vault.
+            if N_Chunks <= 3 then
+               for C in 0 .. N_Chunks - 1 loop
+                  Do_Chunk (C);
+               end loop;
+            else
+               --  Pre-create the 256 two-hex object subdirectories so worker
+               --  tasks only ever create their own unique content directory,
+               --  never a shared parent (which would race).
+               for P in 0 .. 255 loop
+                  Create_Path
+                    (Compose (Compose (Root, "objects"),
+                       (1 => Hex_Digits (P / 16 + 1),
+                        2 => Hex_Digits (P mod 16 + 1))));
+               end loop;
+
                declare
-                  First : constant Stream_Element_Offset :=
-                    Payload'First + Stream_Element_Offset (C * Chunk_Size);
-                  Last  : Stream_Element_Offset :=
-                    First + Stream_Element_Offset (Chunk_Size) - 1;
-               begin
-                  if Last > Payload'Last then
-                     Last := Payload'Last;
-                  end if;
-                  declare
-                     Bytes : Byte_Array := To_Bytes (Payload (First .. Last));
-                  begin
-                     --  Encrypt at source, then address and store cipher text.
-                     XCrypt (EK, Nonce, Counter_For (C), Bytes);
-                     declare
-                        CD  : constant Digest    := SHA256 (Bytes);
-                        Hex : constant Object_Id := To_Hex (CD);
+                  NW : constant Positive :=
+                    Positive'Min
+                      (N_Chunks,
+                       Positive (System.Multiprocessors.Number_Of_CPUs));
+
+                  --  Hands out chunk indices and records the first worker error
+                  --  (state kept here so worker tasks need no up-level variables).
+                  protected Dispatch is
+                     procedure Next (C : out Integer);
+                     procedure Fail (E : Ada.Exceptions.Exception_Occurrence);
+                     procedure Reraise_If_Failed;
+                  private
+                     Cur : Natural := 0;
+                     Bad : Boolean := False;
+                     Occ : Ada.Exceptions.Exception_Occurrence;
+                  end Dispatch;
+
+                  protected body Dispatch is
+                     procedure Next (C : out Integer) is
                      begin
-                        Store_Shards
-                          (Object_Path (Root, Hex), To_Stream (Bytes));
-                        for I in 0 .. 31 loop
-                           Manifest (Hdr + C * 32 + I) := CD (I);
-                        end loop;
-                     end;
+                        if Cur >= N_Chunks then
+                           C := -1;
+                        else
+                           C := Cur;
+                           Cur := Cur + 1;
+                        end if;
+                     end Next;
+
+                     procedure Fail
+                       (E : Ada.Exceptions.Exception_Occurrence) is
+                     begin
+                        if not Bad then
+                           Bad := True;
+                           Ada.Exceptions.Save_Occurrence (Occ, E);
+                        end if;
+                     end Fail;
+
+                     procedure Reraise_If_Failed is
+                     begin
+                        if Bad then
+                           Ada.Exceptions.Reraise_Occurrence (Occ);
+                        end if;
+                     end Reraise_If_Failed;
+                  end Dispatch;
+
+                  task type Worker;
+                  task body Worker is
+                     C : Integer;
+                  begin
+                     loop
+                        Dispatch.Next (C);
+                        exit when C < 0;
+                        Do_Chunk (C);
+                     end loop;
+                  exception
+                     when E : others =>
+                        Dispatch.Fail (E);
+                  end Worker;
+
+               begin
+                  declare
+                     Workers : array (1 .. NW) of Worker;
+                  begin
+                     null;  --  this inner block waits for every Worker
                   end;
+                  Dispatch.Reraise_If_Failed;
                end;
-            end loop;
+            end if;
 
             declare
                MD   : constant Digest    := SHA256 (Manifest);

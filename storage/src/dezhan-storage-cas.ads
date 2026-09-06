@@ -14,7 +14,11 @@ with Ada.Streams; use Ada.Streams;
 with Dezhan.Trusted_Core.Cipher; use Dezhan.Trusted_Core.Cipher;
 package Dezhan.Storage.Cas with SPARK_Mode => Off is
 
-   Chunk_Size : constant := 4096;
+   --  One chunk is one erasure block. The proven crypto/erasure core caps a
+   --  block at Max_Data(8) * Max_Shard_Length(1024) = 8192 bytes and SHA-256 at
+   --  Max_Message = 8192, so 8192 is the largest chunk the verified core admits.
+   --  Larger chunks mean fewer chunks -> fewer shard files and erasure calls.
+   Chunk_Size : constant := 8192;
 
    --  Object id: 64 lowercase hex characters (the manifest's SHA-256).
    subtype Object_Id is String (1 .. 64);
