@@ -11,6 +11,10 @@ pragma Ada_2022;
 --    dezhan_cli sput <name> <data>          (SigV4-signed PUT)
 --    dezhan_cli get <name>
 --    dezhan_cli del <name> [bypass]
+--
+--  Exit status mirrors the server's HTTP status: 0 on a 2xx response, non-zero
+--  on anything else (e.g. a 403 for a retention-blocked delete, a 404 for a
+--  missing object), so a refusal is distinguishable from success in a script.
 with Ada.Text_IO;          use Ada.Text_IO;
 with Ada.Command_Line;     use Ada.Command_Line;
 with Ada.Strings.Fixed;    use Ada.Strings.Fixed;
@@ -25,8 +29,21 @@ procedure Dezhan_Cli is
    LF   : constant String := (1 => ASCII.LF);
 
    --  Product version, printed by `dezhan_cli version` / `--version` / `-v`.
-   --  Kept in step with the release tag and the server's reported build info.
+   --  On a release build scripts/stamp-version.sh overwrites this literal with
+   --  the release tag, so a released binary always reports its own version.
    Version : constant String := "1.1.0";
+
+   Usage : constant String :=
+     "usage: dezhan_cli <command>" & LF
+     & "  version                                 print the client version" & LF
+     & "  health                                  server health (ok / sealed)" & LF
+     & "  metrics                                 Prometheus metrics" & LF
+     & "  put <name> <data> [compliance|governance] [retain_s]  store an object" & LF
+     & "  sput <name> <data>                      SigV4-signed put" & LF
+     & "  get <name>                              retrieve an object" & LF
+     & "  del <name> [bypass]                     delete if retention allows" & LF
+     & "Set DEZHAN_ADDR=host:port (default 127.0.0.1:8080). Exit status mirrors"
+     & " the server's HTTP status.";
 
    --  SigV4 credential, taken from the environment (never hardcode a secret in
    --  a client). The defaults match the server's demo credential so a local
@@ -52,7 +69,11 @@ procedure Dezhan_Cli is
       then Ada.Environment_Variables.Value ("DEZHAN_ADDR")
       else "127.0.0.1:8080");
 
-   --  Send Request, return the full response, print only the body.
+   --  Send Request; stream the response body to stdout and reflect the HTTP
+   --  status in the process exit code. A non-2xx status (e.g. a 403 for a
+   --  retention-blocked delete, or a 404 for a missing object) sets a failure
+   --  exit code so scripts can tell success from a refusal. The body is
+   --  streamed rather than buffered, so a large object is not truncated.
    procedure Round_Trip (Request : String) is
       Addr   : constant String  := Env_Addr;
       Colon  : constant Natural := Index (Addr, ":");
@@ -61,8 +82,11 @@ procedure Dezhan_Cli is
       Sock   : Socket_Type;
       Ch     : Stream_Access;
       C      : Character;
-      Resp   : String (1 .. 1_000_000);
-      Last   : Natural := 0;
+      Status  : Natural := 0;         --  parsed HTTP status code
+      Line    : String (1 .. 256);    --  the status line, until first CR/LF
+      LLen    : Natural := 0;
+      In_Body : Boolean := False;
+      Match   : Natural := 0;         --  progress matching CR,LF,CR,LF
    begin
       Create_Socket (Sock);
       Connect_Socket (Sock, (Family_Inet, Inet_Addr (Host), Port));
@@ -72,26 +96,62 @@ procedure Dezhan_Cli is
       begin
          loop
             Character'Read (Ch, C);
-            if Last < Resp'Last then
-               Last := Last + 1;
-               Resp (Last) := C;
+            if In_Body then
+               Put (C);
+            else
+               --  Accumulate the status line until its terminating CR/LF, then
+               --  parse the numeric code: "HTTP/1.1 200 OK" -> 200.
+               if Status = 0 and then C /= ASCII.CR and then C /= ASCII.LF then
+                  if LLen < Line'Last then
+                     LLen := LLen + 1;
+                     Line (LLen) := C;
+                  end if;
+               elsif Status = 0 and then LLen > 0 then
+                  declare
+                     S1 : constant Natural := Index (Line (1 .. LLen), " ");
+                  begin
+                     if S1 > 0 then
+                        declare
+                           Rest : constant String := Line (S1 + 1 .. LLen);
+                           S2   : constant Natural := Index (Rest, " ");
+                           Code : constant String :=
+                             (if S2 = 0 then Rest else Rest (Rest'First .. S2 - 1));
+                        begin
+                           if Code'Length = 3 then
+                              Status := Natural'Value (Code);
+                           end if;
+                        exception
+                           when others => Status := 0;
+                        end;
+                     end if;
+                  end;
+               end if;
+
+               --  End of headers is the CR LF CR LF sequence.
+               case Match is
+                  when 0 => Match := (if C = ASCII.CR then 1 else 0);
+                  when 1 => Match := (if C = ASCII.LF then 2
+                                      elsif C = ASCII.CR then 1 else 0);
+                  when 2 => Match := (if C = ASCII.CR then 3 else 0);
+                  when others =>
+                     if C = ASCII.LF then
+                        In_Body := True;
+                        Match := 0;
+                     else
+                        Match := (if C = ASCII.CR then 1 else 0);
+                     end if;
+               end case;
             end if;
          end loop;
       exception
          when others => null;  --  connection closed by server
       end;
       Close_Socket (Sock);
-
-      declare
-         Sep : constant Natural := Index (Resp (1 .. Last), CRLF & CRLF);
-      begin
-         if Sep = 0 then
-            Put (Resp (1 .. Last));
-         else
-            Put (Resp (Sep + 4 .. Last));
-         end if;
-      end;
       New_Line;
+
+      if Status < 200 or else Status >= 300 then
+         Set_Exit_Status (Failure);
+      end if;
    end Round_Trip;
 
    function Req
@@ -108,7 +168,7 @@ procedure Dezhan_Cli is
 
 begin
    if Argument_Count = 0 then
-      Put_Line ("usage: dezhan_cli version|health|metrics|put|sput|get|del ...");
+      Put_Line (Usage);
       Set_Exit_Status (Failure);
       return;
    end if;
@@ -118,6 +178,8 @@ begin
    begin
       if Cmd = "version" or else Cmd = "--version" or else Cmd = "-v" then
          Put_Line ("dezhan_cli " & Version);
+      elsif Cmd = "help" or else Cmd = "--help" or else Cmd = "-h" then
+         Put_Line (Usage);
       elsif Cmd = "health" then
          Round_Trip (Req ("GET", "/healthz", "", ""));
       elsif Cmd = "metrics" then
