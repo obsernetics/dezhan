@@ -217,7 +217,9 @@
                         The proof gate (<code>scripts/prove.sh</code>) fails the build on any unproved
                         check. Throughput is measured against MinIO across a 3-node k3s cluster and an
                         on-prem VM; dezhan trades write speed for durability and stays within a small
-                        factor on GET.
+                        factor on GET. Per-chunk encrypt, hash and erasure-code work runs across the
+                        CPUs, so large-object writes scale with the core count, and objects of any size
+                        store and restore.
                     </p>
                     <a class="btn btn-outline btn-sm" href="https://github.com/obsernetics/dezhan/tree/main/bench" target="_blank" rel="noopener">Benchmark harness &amp; results &#8599;</a>
                 </div>
