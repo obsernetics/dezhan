@@ -13,9 +13,11 @@ project Dezhan_Server is
    end Compiler;
 
    package Binder is
-      --  Generous secondary stack: (de)compressing a multi-megabyte object
-      --  returns whole-object arrays by value on the secondary stack.
-      for Default_Switches ("Ada") use ("-D64m");
+      --  Generous secondary stack: a full-object GET returns the assembled
+      --  object here, and (de)compression returns whole-object arrays by value.
+      --  256 MB covers large single-object restores; bigger objects use ranged
+      --  GETs and multipart.
+      for Default_Switches ("Ada") use ("-D256m");
    end Binder;
 
 end Dezhan_Server;

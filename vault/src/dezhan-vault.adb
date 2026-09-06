@@ -521,10 +521,13 @@ package body Dezhan.Vault with SPARK_Mode => Off is
       Retain_For : Trusted_Time;
       User_Meta  : String := "")
    is
-      --  Part size for the large-object fallback: comfortably under the single
-      --  -manifest cap (a part of this size yields ~220 chunks).
-      Part_Size : constant := 900_000;
-      Root      : constant String := To_String (V.Self.Root);
+      --  Part size for the large-object split (comfortably under the single
+      --  -manifest cap). Objects up to Max_Single store as one manifest; larger
+      --  ones split into Part_Size parts, so the chunker is never handed more
+      --  than it (or the task stack) can take.
+      Part_Size  : constant := 900_000;
+      Max_Single : constant := 2_000_000;
+      Root       : constant String := To_String (V.Self.Root);
    begin
       Check_Ingest (V);
       if Mode = Unlocked then
@@ -536,45 +539,57 @@ package body Dezhan.Vault with SPARK_Mode => Off is
            Create_Lock (Mode, At_Time + Retain_For, At_Time);
          Obj_Id  : Object_Id;
          Comp    : Boolean := False;
-      begin
+
+         --  Store an over-sized object as a composite of Part_Size parts (the
+         --  same shape as a completed multipart upload), so the chunker only
+         --  ever sees bounded, single-manifest inputs.
+         function Store_Composite return Object_Id is
+            N_Parts : constant Natural :=
+              (Natural (Data'Length) + Part_Size - 1) / Part_Size;
+            List    : Stream_Element_Array
+                        (1 .. Stream_Element_Offset (N_Parts * 64));
+            LPos    : Stream_Element_Offset := 1;
          begin
-            Obj_Id := Put (Root, V.Self.Key, Data);
-         exception
-            when Object_Too_Large =>
-               --  Too big for one manifest: split into parts and store a
-               --  composite (same shape as a completed multipart upload).
-               Comp := True;
+            for P in 0 .. N_Parts - 1 loop
                declare
-                  N_Parts : constant Natural :=
-                    (Natural (Data'Length) + Part_Size - 1) / Part_Size;
-                  List    : Stream_Element_Array
-                              (1 .. Stream_Element_Offset (N_Parts * 64));
-                  LPos    : Stream_Element_Offset := 1;
+                  F : constant Stream_Element_Offset :=
+                    Data'First + Stream_Element_Offset (P * Part_Size);
+                  L : Stream_Element_Offset := F + Part_Size - 1;
                begin
-                  for P in 0 .. N_Parts - 1 loop
-                     declare
-                        F   : constant Stream_Element_Offset :=
-                          Data'First + Stream_Element_Offset (P * Part_Size);
-                        L   : Stream_Element_Offset := F + Part_Size - 1;
-                     begin
-                        if L > Data'Last then
-                           L := Data'Last;
-                        end if;
-                        declare
-                           Pid : constant Object_Id :=
-                             Put (Root, V.Self.Key, Data (F .. L));
-                        begin
-                           for I in 0 .. 63 loop
-                              List (LPos) :=
-                                Stream_Element (Character'Pos (Pid (Pid'First + I)));
-                              LPos := LPos + 1;
-                           end loop;
-                        end;
-                     end;
-                  end loop;
-                  Obj_Id := Put (Root, V.Self.Key, List);
+                  if L > Data'Last then
+                     L := Data'Last;
+                  end if;
+                  declare
+                     Pid : constant Object_Id :=
+                       Put (Root, V.Self.Key, Data (F .. L));
+                  begin
+                     for I in 0 .. 63 loop
+                        List (LPos) :=
+                          Stream_Element (Character'Pos (Pid (Pid'First + I)));
+                        LPos := LPos + 1;
+                     end loop;
+                  end;
                end;
-         end;
+            end loop;
+            return Put (Root, V.Self.Key, List);
+         end Store_Composite;
+      begin
+         --  Split large objects up front: handing the whole object to the
+         --  chunker copies it onto the task stack (and overflows past a few tens
+         --  of MB) before the manifest-size fallback could fire. The exception
+         --  path stays as a safety net for the boundary.
+         if Natural (Data'Length) <= Max_Single then
+            begin
+               Obj_Id := Put (Root, V.Self.Key, Data);
+            exception
+               when Object_Too_Large =>
+                  Comp := True;
+                  Obj_Id := Store_Composite;
+            end;
+         else
+            Comp := True;
+            Obj_Id := Store_Composite;
+         end if;
 
          V.Self.Index.Include
            (Name, (Id => Obj_Id, Lock => Lock, Composite => Comp,
@@ -604,40 +619,47 @@ package body Dezhan.Vault with SPARK_Mode => Off is
          if not M.Composite then
             return Get (Root, V.Self.Key, M.Id);
          end if;
-         --  Composite: M.Id is a list of 64-char part ids; fetch and join them.
+         --  Composite: M.Id is a list of 64-char part ids. Fetch each part and
+         --  copy it in whole slices into the result, which is built as the
+         --  return object (no extra whole-object copy, no per-byte loop).
+         --  M.Size is the exact assembled length; parts may vary in size, so
+         --  track the running position.
          declare
             List : constant Stream_Element_Array := Get (Root, V.Self.Key, M.Id);
             N    : constant Natural := Natural (List'Length) / 64;
-            Acc  : Unbounded_String;
          begin
-            for P in 0 .. N - 1 loop
+            --  Fetch each part in order and copy it into the result as a whole
+            --  slice. (Parts are fetched sequentially: a part may be DEFLATE
+            --  -compressed, and the decompressor is not reentrant, so parts
+            --  cannot be decoded concurrently.) M.Size is the exact assembled
+            --  length; part sizes vary, so track the running position.
+            return R : Stream_Element_Array
+                         (1 .. Stream_Element_Offset (M.Size))
+            do
                declare
-                  Pid : Object_Id;
+                  Pos : Stream_Element_Offset := R'First;
                begin
-                  for I in 0 .. 63 loop
-                     Pid (Pid'First + I) :=
-                       Character'Val (Natural
-                         (List (List'First + Stream_Element_Offset (P * 64 + I))));
+                  for P in 0 .. N - 1 loop
+                     declare
+                        Pid : Object_Id;
+                     begin
+                        for I in 0 .. 63 loop
+                           Pid (Pid'First + I) :=
+                             Character'Val (Natural
+                               (List (List'First
+                                      + Stream_Element_Offset (P * 64 + I))));
+                        end loop;
+                        declare
+                           Part : constant Stream_Element_Array :=
+                             Get (Root, V.Self.Key, Pid);
+                        begin
+                           R (Pos .. Pos + Part'Length - 1) := Part;
+                           Pos := Pos + Part'Length;
+                        end;
+                     end;
                   end loop;
-                  declare
-                     Part : constant Stream_Element_Array :=
-                       Get (Root, V.Self.Key, Pid);
-                  begin
-                     for B in Part'Range loop
-                        Append (Acc, Character'Val (Natural (Part (B))));
-                     end loop;
-                  end;
                end;
-            end loop;
-            declare
-               R : Stream_Element_Array (1 .. Stream_Element_Offset (Length (Acc)));
-            begin
-               for I in 1 .. Length (Acc) loop
-                  R (Stream_Element_Offset (I)) :=
-                    Stream_Element (Character'Pos (Element (Acc, I)));
-               end loop;
-               return R;
-            end;
+            end return;
          end;
       end;
    end Get_Object;
