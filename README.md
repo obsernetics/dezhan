@@ -123,11 +123,15 @@ $ALIAS s3 rm  s3://vault/important.bak                 # refused until retention
 Or the built-in CLI that ships in the image (this is the flow in the demo above):
 
 ```sh
+dezhan_cli version                                  # dezhan_cli 1.1.0
 dezhan_cli health                                   # ok / sealed
 dezhan_cli put report data.tar compliance 86400     # store under a 1-day retention
 dezhan_cli get report                               # restores keep working
 dezhan_cli del report                               # refused until retention expires
 ```
+
+The running server reports its own version at `GET /version` and as a
+`dezhan_build_info{version="..."}` metric on `/metrics`.
 
 Buckets are mutable (Standard) by default; enabling Object Lock makes a bucket
 Immutable/WORM. More examples — `restic`, `boto3`, Velero, the operator CR — are
