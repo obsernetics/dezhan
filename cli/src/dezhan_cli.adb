@@ -4,9 +4,11 @@ pragma Ada_2022;
 --  elsewhere (default 127.0.0.1:8080).
 --
 --  Usage:
+--    dezhan_cli version | --version | -v
 --    dezhan_cli health
 --    dezhan_cli metrics
 --    dezhan_cli put <name> <data> [compliance|governance] [retain_seconds]
+--    dezhan_cli sput <name> <data>          (SigV4-signed PUT)
 --    dezhan_cli get <name>
 --    dezhan_cli del <name> [bypass]
 with Ada.Text_IO;          use Ada.Text_IO;
@@ -21,6 +23,10 @@ procedure Dezhan_Cli is
 
    CRLF : constant String := ASCII.CR & ASCII.LF;
    LF   : constant String := (1 => ASCII.LF);
+
+   --  Product version, printed by `dezhan_cli version` / `--version` / `-v`.
+   --  Kept in step with the release tag and the server's reported build info.
+   Version : constant String := "1.1.0";
 
    --  SigV4 credential, taken from the environment (never hardcode a secret in
    --  a client). The defaults match the server's demo credential so a local
@@ -102,7 +108,7 @@ procedure Dezhan_Cli is
 
 begin
    if Argument_Count = 0 then
-      Put_Line ("usage: dezhan_cli health|metrics|put|get|del ...");
+      Put_Line ("usage: dezhan_cli version|health|metrics|put|sput|get|del ...");
       Set_Exit_Status (Failure);
       return;
    end if;
@@ -110,7 +116,9 @@ begin
    declare
       Cmd : constant String := Argument (1);
    begin
-      if Cmd = "health" then
+      if Cmd = "version" or else Cmd = "--version" or else Cmd = "-v" then
+         Put_Line ("dezhan_cli " & Version);
+      elsif Cmd = "health" then
          Round_Trip (Req ("GET", "/healthz", "", ""));
       elsif Cmd = "metrics" then
          Round_Trip (Req ("GET", "/metrics", "", ""));

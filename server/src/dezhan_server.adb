@@ -10,7 +10,8 @@ pragma Ada_2022;
 --  Routes:
 --    GET    /                   web UI
 --    GET    /healthz            liveness
---    GET    /metrics            Prometheus metrics
+--    GET    /version            server version string
+--    GET    /metrics            Prometheus metrics (incl. dezhan_build_info)
 --    POST   /admin/tick         advance trusted time from the system clock
 --    POST   /admin/seal         operator seal (read-only)
 --    POST   /admin/scrub        run an integrity scrub
@@ -55,7 +56,8 @@ with GNAT.OS_Lib;
 
 procedure Dezhan_Server is
 
-   Version : constant String := "dezhan 1.0";
+   Version_Number : constant String := "1.1.0";
+   Version        : constant String := "dezhan " & Version_Number;
    CRLF    : constant String := ASCII.CR & ASCII.LF;
 
    Port : constant Port_Type :=
@@ -1710,6 +1712,7 @@ procedure Dezhan_Server is
          declare
             Is_Control : constant Boolean :=
               Path0 = "/" or else Path0 = "/healthz" or else Path0 = "/metrics"
+              or else Path0 = "/version"
               or else Path0 = "/approve"
               or else (Path0'Length >= 6
                        and then Path0 (Path0'First .. Path0'First + 5) = "/admin");
@@ -1797,10 +1800,16 @@ procedure Dezhan_Server is
          elsif Method = "GET" and then Path = "/healthz" then
             Send_Text (Ch, "200 OK", (if Sealed (V) then "sealed" else "ok"));
 
+         elsif Method = "GET" and then Path = "/version" then
+            Send_Text (Ch, "200 OK", Version);
+
          elsif Method = "GET" and then Path = "/metrics" then
             Send_Text
               (Ch, "200 OK",
-               "# HELP dezhan_objects Stored object count" & CRLF
+               "# HELP dezhan_build_info Build/version info (value is always 1)" & CRLF
+               & "# TYPE dezhan_build_info gauge" & CRLF
+               & "dezhan_build_info{version=""" & Version_Number & """} 1" & CRLF
+               & "# HELP dezhan_objects Stored object count" & CRLF
                & "# TYPE dezhan_objects gauge" & CRLF
                & "dezhan_objects" & Natural'Image (Object_Count (V)) & CRLF
                & "# HELP dezhan_quarantined Objects quarantined (unrepairable)" & CRLF
