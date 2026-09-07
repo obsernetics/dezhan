@@ -215,11 +215,11 @@
                     <h3>Measured, not asserted</h3>
                     <p>
                         The proof gate (<code>scripts/prove.sh</code>) fails the build on any unproved
-                        check. Throughput is measured against MinIO across a 3-node k3s cluster and an
-                        on-prem VM; dezhan trades write speed for durability and stays within a small
-                        factor on GET. Per-chunk encrypt, hash and erasure-code work runs across the
-                        CPUs, so large-object writes scale with the core count, and objects of any size
-                        store and restore.
+                        check. Throughput is measured against MinIO on one VM with the same harness.
+                        dezhan trades write speed for durability and integrity: it is far slower than
+                        MinIO on PUT (about 1.2 MB/s at 4 MiB versus ~130 MB/s) and closer on GET
+                        (about 37 MB/s versus ~780 MB/s). Per-chunk encrypt, hash and erasure-code work
+                        runs across the CPUs, and objects of any size store and restore.
                     </p>
                     <a class="btn btn-outline btn-sm" href="https://github.com/obsernetics/dezhan/tree/main/bench" target="_blank" rel="noopener">Benchmark harness &amp; results &#8599;</a>
                 </div>

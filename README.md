@@ -193,19 +193,18 @@ check**, so the mandatory invariants stay machine-proved on every commit.
 [`scripts/coverage.sh`](scripts/coverage.sh) holds trusted-core line coverage,
 and [`scripts/test.sh`](scripts/test.sh) runs the unit suite.
 
-Throughput is measured the same way, against MinIO as a reference across a
-3-node k3s cluster and an on-prem VM. dezhan trades write speed for durability
-and integrity, so it is slower than MinIO on `PUT` and within a small factor on
-`GET`. Harness, raw results, and tables: [`bench/`](bench/)
-(`bench/results/COMPARISON.md`).
+Throughput is measured with [`bench/s3bench.py`](bench/s3bench.py) against MinIO
+as a reference, both servers on one VM (4 vCPU), same harness. dezhan trades
+write speed for durability and integrity: every object is content-addressed,
+ChaCha20-encrypted per chunk, Reed-Solomon erasure-coded, and fsync'd. It is far
+slower than MinIO on `PUT` (about 1.2 MB/s at 4 MiB, versus MinIO's ~130 MB/s)
+and closer on `GET` (about 37 MB/s versus ~780 MB/s at 4 MiB). Small-object
+writes are fsync-bound at roughly 1 op/s. Objects store and restore correctly at
+any size, and per-chunk encrypt-and-encode runs in parallel across cores. Full
+tables and raw results: [`bench/results/COMPARISON.md`](bench/results/COMPARISON.md).
+Re-run `bench/s3bench.py` then `bench/graph.py` to refresh.
 
-The committed figures predate the parallel-chunk PUT work and the large-object
-fix. Since then, large-object (4 MiB and up) PUT throughput is roughly 3x higher
-and single objects past a few tens of MB store and restore correctly;
-small-object rates are fsync-bound and unchanged. Re-run `bench/s3bench.py` to
-refresh the tables and `bench/graph.py` for the chart.
-
-![dezhan vs MinIO/Longhorn](bench/dezhan-vs-others.svg)
+![dezhan vs MinIO](bench/dezhan-vs-others.svg)
 
 ## Requirements
 
