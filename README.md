@@ -17,7 +17,7 @@
   <a href="#contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome" /></a>
 </p>
 
-<img src="docs/assets/demo.gif" alt="dezhan demo: an object is stored under a retention lock, every attempt to delete it before expiry is refused in the vault, and only an object whose retention has elapsed can be deleted" width="880" />
+<img src="docs/assets/demo.gif" alt="dezhan demo: objects are written over the S3 data plane (make-bucket, copy, list) with multipart uploads encrypted and erasure-coded in parallel, an object is then locked under a retention, every attempt to delete it before expiry is refused, and only an object whose retention has elapsed can be deleted" width="880" />
 
 </div>
 
@@ -41,9 +41,11 @@ object.
 </p>
 
 It speaks S3, so nothing about your existing backup tooling has to change: point
-`aws-cli`, `restic`, Veeam, Velero, or `boto3` at it. It runs on-prem and fully
-air-gapped, with no external runtime dependency. It is an alternative to MinIO
-and Veeam for the one job where "probably fine" is not good enough.
+`restic`, Velero, Veeam, `aws-cli`, or `boto3` at it. It runs on-prem and fully
+air-gapped, with no external runtime dependency. It is the immutable backup
+target for the one job where "probably fine" is not good enough: where tools like
+Veeam lean on storage-layer immutability, dezhan proves the guarantee in its
+core.
 
 ## What that buys you
 
@@ -193,18 +195,24 @@ check**, so the mandatory invariants stay machine-proved on every commit.
 [`scripts/coverage.sh`](scripts/coverage.sh) holds trusted-core line coverage,
 and [`scripts/test.sh`](scripts/test.sh) runs the unit suite.
 
-Throughput is measured with [`bench/s3bench.py`](bench/s3bench.py) against MinIO
-as a reference, both servers on one VM (4 vCPU), same harness. dezhan trades
-write speed for durability and integrity: every object is content-addressed,
-ChaCha20-encrypted per chunk, Reed-Solomon erasure-coded, and fsync'd. It is far
-slower than MinIO on `PUT` (about 1.2 MB/s at 4 MiB, versus MinIO's ~130 MB/s)
-and closer on `GET` (about 37 MB/s versus ~780 MB/s at 4 MiB). Small-object
-writes are fsync-bound at roughly 1 op/s. Objects store and restore correctly at
-any size, and per-chunk encrypt-and-encode runs in parallel across cores. Full
-tables and raw results: [`bench/results/COMPARISON.md`](bench/results/COMPARISON.md).
+dezhan is an immutable backup target: backup tools write to its S3 API, and the
+retention guarantee is enforced in the vault itself. Throughput is measured with
+[`bench/s3bench.py`](bench/s3bench.py) on one VM (4 vCPU). dezhan trades write
+speed for durability and integrity: every object is content-addressed,
+ChaCha20-encrypted per chunk, Reed-Solomon erasure-coded, and fsync'd, so writes
+are deliberately slow (about 1.2 MB/s at 4 MiB, and small-object writes are
+fsync-bound at roughly 1 op/s) while reads are faster (about 37 MB/s at 4 MiB).
+Objects store and restore correctly at any size, and per-chunk encrypt-and-encode
+runs in parallel across cores.
+
+Against Veeam, the closest immutable-backup product, the difference is how
+immutability is guaranteed: dezhan proves the delete-before-expiry path
+unreachable in its trusted core, where Veeam enforces it in the storage layer
+(the XFS immutable flag or S3 Object Lock). Full throughput tables and the
+capability comparison: [`bench/results/COMPARISON.md`](bench/results/COMPARISON.md).
 Re-run `bench/s3bench.py` then `bench/graph.py` to refresh.
 
-![dezhan vs MinIO](bench/dezhan-vs-others.svg)
+![dezhan measured S3 throughput](bench/dezhan-vs-others.svg)
 
 ## Requirements
 

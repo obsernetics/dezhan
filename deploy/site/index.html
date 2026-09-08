@@ -215,11 +215,13 @@
                     <h3>Measured, not asserted</h3>
                     <p>
                         The proof gate (<code>scripts/prove.sh</code>) fails the build on any unproved
-                        check. Throughput is measured against MinIO on one VM with the same harness.
-                        dezhan trades write speed for durability and integrity: it is far slower than
-                        MinIO on PUT (about 1.2 MB/s at 4 MiB versus ~130 MB/s) and closer on GET
-                        (about 37 MB/s versus ~780 MB/s). Per-chunk encrypt, hash and erasure-code work
-                        runs across the CPUs, and objects of any size store and restore.
+                        check. Throughput is measured on one VM with the same harness. dezhan trades
+                        write speed for durability and integrity: writes are deliberately slow (about
+                        1.2 MB/s at 4 MiB, small objects fsync-bound near 1 op/s) while reads are faster
+                        (about 37 MB/s at 4 MiB). Unlike Veeam, which enforces immutability in the
+                        storage layer, dezhan proves the delete-before-expiry path unreachable in its
+                        trusted core. Per-chunk encrypt, hash and erasure-code work runs across the CPUs,
+                        and objects of any size store and restore.
                     </p>
                     <a class="btn btn-outline btn-sm" href="https://github.com/obsernetics/dezhan/tree/main/bench" target="_blank" rel="noopener">Benchmark harness &amp; results &#8599;</a>
                 </div>
