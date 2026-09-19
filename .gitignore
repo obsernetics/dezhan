@@ -20,6 +20,9 @@ ctl/dezhanctl
 __pycache__/
 *.py[cod]
 
+# Generated GitHub Pages output (scripts/gen-site.py; built in CI)
+public/
+
 # Local dev tooling and build VM (not part of the published software)
 vm/
 .vscode/
