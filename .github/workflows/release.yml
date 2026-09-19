@@ -54,11 +54,18 @@ jobs:
         with:
           version: v3.15.4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ctl/go.mod
+          cache-dependency-path: ctl/go.sum
+
       - name: Build release binaries
         run: |
           gprbuild -p -P dezhan.gpr -cargs -O2
           mkdir -p dist
           cp server/obj/dezhan_server cli/obj/dezhan_cli verifier/obj/dezhan_verify dist/
+          ( cd ctl && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../dist/dezhanctl . )
           ( cd dist && sha256sum * > SHA256SUMS )
 
       - name: Package Helm chart at the release version
@@ -79,6 +86,7 @@ jobs:
             dist/dezhan_server
             dist/dezhan_cli
             dist/dezhan_verify
+            dist/dezhanctl
             dist/SHA256SUMS
             dist/dezhan.cdx.json
             dist/dezhan-*.tgz
