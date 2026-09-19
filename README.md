@@ -160,6 +160,10 @@ dezhanctl health               # scriptable checks
 dezhanctl ls
 dezhanctl put report data --mode compliance --retain 86400
 dezhanctl del report           # refused while the object is retained
+
+dezhanctl admin scrub          # operator control plane (token-gated)
+dezhanctl admin gc
+dezhanctl admin checkpoint --admin-token "$DEZHAN_ADMIN_TOKEN"
 ```
 
 ## Architecture

@@ -152,6 +152,24 @@ func (c *Client) Delete(ctx context.Context, name string, bypass bool) (string, 
 	return strings.TrimSpace(body), nil
 }
 
+// Admin POSTs to an /admin/<action> control endpoint. When token is non-empty
+// it is sent as X-Dezhan-Admin-Token (required when the server sets
+// DEZHAN_ADMIN_TOKEN). action is the bare name, e.g. "scrub" or "seal".
+func (c *Client) Admin(ctx context.Context, action, token string) (string, error) {
+	h := map[string]string{}
+	if token != "" {
+		h["X-Dezhan-Admin-Token"] = token
+	}
+	body, code, err := c.text(ctx, http.MethodPost, "/admin/"+action, h, nil)
+	if err != nil {
+		return "", err
+	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("admin %s: HTTP %d: %s", action, code, strings.TrimSpace(body))
+	}
+	return strings.TrimSpace(body), nil
+}
+
 // Metrics is a parsed snapshot of /metrics.
 type Metrics struct {
 	Values  map[string]float64

@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	endpoint string
-	timeout  time.Duration
+	endpoint   string
+	timeout    time.Duration
+	adminToken string
 )
 
 func defaultEndpoint() string {
@@ -40,4 +41,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&endpoint, "endpoint", "e", defaultEndpoint(),
 		"dezhan server endpoint (or set DEZHAN_ENDPOINT)")
 	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", 10*time.Second, "request timeout")
+	rootCmd.PersistentFlags().StringVar(&adminToken, "admin-token", os.Getenv("DEZHAN_ADMIN_TOKEN"),
+		"admin token for /admin/* actions (or set DEZHAN_ADMIN_TOKEN)")
 }
