@@ -5,6 +5,16 @@ on:
     branches: [ main ]
   pull_request:
 
+# Least privilege: the job only needs to read the repo contents.
+permissions:
+  contents: read
+
+# Cancel any in-progress run for the same ref when a newer commit arrives, so
+# rapid pushes do not pile up redundant ~20 min proof jobs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Build the product, run every unit test, measure trusted-core coverage, and as
 # a hard gate run the SPARK proof. The job fails if gnatprove reports a single
 # unproved check, so the mandatory immutability invariants stay machine-proved
@@ -18,6 +28,20 @@ jobs:
 
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
+
+      # Cache the Alire-managed GNAT/GPRbuild toolchain and the installed
+      # gnatprove so the provision step is a fast no-op on a warm cache instead
+      # of re-downloading the toolchain every run. Bump the "v1" suffix to force
+      # a rebuild of the cache.
+      - name: Cache Alire toolchain and GNATprove
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/alire
+            ~/.alire
+          key: alire-${{ runner.os }}-v1
+          restore-keys: |
+            alire-${{ runner.os }}-
 
       - name: Provision toolchain and GNATprove
         run: |
@@ -44,8 +68,10 @@ jobs:
         uses: actions/cache@v6
         with:
           path: trusted_core/obj/gnatprove
-          key: gnatprove-${{ hashFiles('trusted_core/src/**', 'scripts/prove.sh') }}
+          key: gnatprove-${{ runner.os }}-v1-${{ hashFiles('trusted_core/src/**', 'trusted_core/dezhan_trusted_core.gpr', 'scripts/prove.sh') }}
           restore-keys: |
+            gnatprove-${{ runner.os }}-v1-
+            gnatprove-${{ runner.os }}-
             gnatprove-
 
       - name: SPARK proof gate (hard)

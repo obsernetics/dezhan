@@ -16,6 +16,14 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: write
+
+# Cancel superseded runs for the same ref. Keying on github.ref keeps
+# different branches and tags independent, so tag/release builds never
+# cancel each other.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -79,5 +87,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
