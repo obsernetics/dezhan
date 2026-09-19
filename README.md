@@ -11,7 +11,7 @@
   <a href="https://obsernetics.github.io/dezhan/"><img src="https://img.shields.io/badge/website-obsernetics.github.io%2Fdezhan-1f6feb" alt="Website" /></a>
 </p>
 
-<img src="docs/assets/demo.gif" alt="dezhanctl demo: store an object under a retention, watch a delete-before-expiry be refused, then open the live dashboard" width="900" />
+<img src="docs/assets/demo.gif?v=140" alt="dezhanctl demo: store an object under a retention, watch a delete-before-expiry be refused, then open the live dashboard" width="900" />
 
 </div>
 
