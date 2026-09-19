@@ -16,7 +16,6 @@ on:
 permissions:
   contents: read
   packages: write
-  actions: write
 
 # Cancel superseded runs for the same ref. Keying on github.ref keeps
 # different branches and tags independent, so tag/release builds never
