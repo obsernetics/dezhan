@@ -42,8 +42,7 @@ immutability, dezhan proves the guarantee in its own core.
 
 ## Control CLI and live dashboard
 
-`dezhanctl` is a Go control CLI with a live TUI dashboard, built with Cobra and
-[Bubble Tea](https://github.com/charmbracelet/bubbletea). It reads the vault's
+`dezhanctl` is a control CLI with a live TUI dashboard. It reads the vault's
 plain control plane (`/healthz`, `/version`, `/metrics`, `/v`), so it needs no
 AWS SDK and works against a local or air-gapped server.
 
