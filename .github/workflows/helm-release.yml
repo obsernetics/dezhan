@@ -50,9 +50,20 @@ jobs:
           # 1) Helm chart repository at the site root (keeps the repo add URL).
           helm package deploy/charts/dezhan -d public
           helm repo index public --url "$BASE"
-          # 2) Landing page + its assets (css/js/icon), then the demo GIF.
+          # 2) Landing page + its assets (css/js/icon), then the demo GIF and
+          #    the dashboard screenshot.
           cp -r deploy/site/. public/
           cp docs/assets/demo.gif public/assets/demo.gif
+          cp docs/assets/dashboard.png public/assets/dashboard.png
+          # 3) Cache-bust asset URLs with the commit sha so an update is never
+          #    masked by a browser holding the previous copy at the same URL.
+          REV="${GITHUB_SHA::7}"
+          sed -i \
+            -e "s#assets/demo.gif#assets/demo.gif?v=$REV#g" \
+            -e "s#assets/dashboard.png#assets/dashboard.png?v=$REV#g" \
+            -e "s#\(assets/css/main.css\)?v=[0-9A-Za-z]*#\1?v=$REV#g" \
+            -e "s#\(assets/js/main.js\)?v=[0-9A-Za-z]*#\1?v=$REV#g" \
+            public/index.html
 
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
