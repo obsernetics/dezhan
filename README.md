@@ -17,7 +17,7 @@
   <a href="#contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome" /></a>
 </p>
 
-<img src="docs/assets/demo.gif" alt="dezhan demo: objects are written over the S3 data plane (make-bucket, copy, list) with multipart uploads encrypted and erasure-coded in parallel, an object is then locked under a retention, every attempt to delete it before expiry is refused, and only an object whose retention has elapsed can be deleted" width="880" />
+<img src="docs/assets/demo.gif" alt="dezhanctl demo: check health, store an object under a compliance retention, show its metadata, watch a delete-before-expiry be refused, then open the live dashboard showing health, seal state, object count, audit chain and scrub status" width="880" />
 
 </div>
 
@@ -124,7 +124,8 @@ $ALIAS s3 cp important.bak s3://vault/
 $ALIAS s3 rm  s3://vault/important.bak                 # refused until retention expires
 ```
 
-Or the built-in CLI that ships in the image (this is the flow in the demo above):
+Or the built-in CLI that ships in the image (the dezhanctl dashboard in the demo
+above talks to the same vault over its control plane):
 
 ```sh
 dezhan_cli version                                  # dezhan_cli 1.3.0
