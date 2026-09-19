@@ -7,106 +7,79 @@
 <p>
   <a href="https://github.com/obsernetics/dezhan/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/obsernetics/dezhan/ci.yml?branch=main&label=CI&logo=github" alt="CI" /></a>
   <a href="scripts/prove.sh"><img src="https://img.shields.io/badge/SPARK%20proof-325%20checks%2C%200%20unproved-brightgreen" alt="SPARK proof: 325 checks, 0 unproved" /></a>
-  <a href="scripts/coverage.sh"><img src="https://img.shields.io/badge/trusted--core%20coverage-95%25-brightgreen" alt="trusted-core coverage 95%" /></a>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0" /></a>
   <br/>
   <img src="https://img.shields.io/badge/Ada%202022%20%2F%20SPARK-gnatprove-2E8B57?logo=ada&logoColor=white" alt="Ada 2022 / SPARK" />
   <img src="https://img.shields.io/badge/API-S3%20compatible-FF9900?logo=amazons3&logoColor=white" alt="S3 compatible" />
-  <img src="https://img.shields.io/badge/deploy-air--gapped-555" alt="air-gapped" />
   <a href="https://obsernetics.github.io/dezhan/"><img src="https://img.shields.io/badge/website-obsernetics.github.io%2Fdezhan-1f6feb" alt="Website" /></a>
-  <a href="#contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome" /></a>
 </p>
 
-<img src="docs/assets/demo.gif" alt="dezhan demo: objects are written over the S3 data plane (make-bucket, copy, list) with multipart uploads encrypted and erasure-coded in parallel, an object is then locked under a retention, every attempt to delete it before expiry is refused, and only an object whose retention has elapsed can be deleted" width="880" />
+<img src="docs/assets/demo.gif" alt="dezhanctl demo: check health, store an object under a compliance retention, show its metadata, watch a delete-before-expiry be refused, then open the live dashboard" width="900" />
 
 </div>
 
-## The idea
+## What it is
 
-A backup is only worth what you can prove about it the morning you actually need
-it. Ransomware operators and rogue insiders both know this, so the modern
-playbook is not to encrypt your data first — it is to delete the backups first,
-and then encrypt.
+A backup is only worth what you can prove about it the morning you need it. The
+modern ransomware playbook is not to encrypt your data first; it is to delete the
+backups first, then encrypt.
 
 dezhan closes that door. When you write an object under a retention, the vault
-refuses to delete it, shorten its retention, or expire it early, until the clock
-legitimately passes the deadline. "Refuses" here is not a policy check that an
-admin flag can turn off. It is a small state machine whose single job is
-**proved**, with `gnatprove`, to have no execution path that deletes a retained
-object.
+refuses to delete it, shorten its retention, or expire it early until the clock
+legitimately passes the deadline. That refusal is not a policy check an admin
+flag can turn off. It is a small SPARK state machine, proved by `gnatprove` to
+have no execution path that deletes a retained object.
+
+It speaks S3, so your existing backup tools write to it unchanged: `restic`,
+Velero, Veeam, `aws-cli`, `boto3`. It runs on-prem and fully air-gapped with no
+external runtime dependency. Where tools like Veeam lean on storage-layer
+immutability, dezhan proves the guarantee in its own core.
 
 <p align="center">
   <img src="docs/assets/lifecycle.svg" width="900"
-       alt="Object lifecycle: an object written under a retention becomes a proved invariant - reads and expired deletes are OK, deleting a retained object is DENIED, and a rolled-forward clock leaves the vault SEALED.">
+       alt="Object lifecycle: an object under a retention is a proved invariant; reads and expired deletes are OK, deleting a retained object is DENIED, and a rolled-forward clock leaves the vault SEALED.">
 </p>
 
-It speaks S3, so nothing about your existing backup tooling has to change: point
-`restic`, Velero, Veeam, `aws-cli`, or `boto3` at it. It runs on-prem and fully
-air-gapped, with no external runtime dependency. It is the immutable backup
-target for the one job where "probably fine" is not good enough: where tools like
-Veeam lean on storage-layer immutability, dezhan proves the guarantee in its
-core.
+## Control CLI and live dashboard
 
-## What that buys you
+`dezhanctl` is a Go control CLI with a live TUI dashboard, built with Cobra and
+[Bubble Tea](https://github.com/charmbracelet/bubbletea). It reads the vault's
+plain control plane (`/healthz`, `/version`, `/metrics`, `/v`), so it needs no
+AWS SDK and works against a local or air-gapped server.
 
-**Your last good copy cannot be erased.** A compromised admin account, a stolen
-credential, or ransomware with delete permissions still cannot remove an object
-before its retention expires. The delete simply does not happen, and the attempt
-is written to an append-only audit chain.
+![dezhanctl dashboard](docs/assets/dashboard.png)
 
-**Compliance you can demonstrate, not just assert.** WORM and S3 Object Lock
-exist elsewhere as features. Here the enforcement is a formally verified state
-machine, and the proof is re-checked on every commit, so "immutable" is a
-property of the build rather than a promise in a datasheet.
+```sh
+cd ctl && go build -o dezhanctl .
+export DEZHAN_ENDPOINT=http://127.0.0.1:8080
 
-**A denial is a proof, not a toggle.** There is no override flag, no support
-back door, and no clock trick. The vault either found that the retention had
-elapsed or it did not. When dezhan refuses a delete, the object is still there,
-byte for byte, and it will be there tomorrow.
-
-## The trade, stated plainly
-
-Immutability an attacker cannot bypass is immutability **you** cannot bypass
-either.
-
-If you write an object under a compliance-mode retention, you will not delete it
-before it expires — not with the admin token, not by moving the system clock,
-not by restarting the server. That is not a limitation being worked around; it
-is the same mechanism working correctly, and any honest evaluation of this tool
-has to start there.
-
-Three things exist because of it: **governance vs compliance** modes, so you
-choose how absolute the lock is up front; **retention `0` and natural expiry**,
-the deliberate paths by which objects do become deletable; and ordinary S3
-versioning on mutable buckets. Immutability is opt-in per bucket and per object,
-not a mode the whole system is stuck in.
-
-The other cost is throughput. Every write is `fsync`'d, erasure-coded, and
-encrypted before it is acknowledged, so `PUT` is slower than a plain object
-store. The per-chunk encrypt, hash and erasure-code work is spread across the
-CPUs, so a large object scales with the core count, and objects of any size are
-stored (split into parts under the hood). Compression is probed on a small
-prefix and skipped when it would not help, so already-compressed uploads (media,
-archives, encrypted blobs) are not slowed by a futile DEFLATE pass. GET stays
-within a small factor. The numbers are in [`bench/`](bench/) and summarized
-under [Measured, not asserted](#measured-not-asserted).
+dezhanctl dashboard            # live TUI: health, seal state, objects, audit, scrub
+dezhanctl dashboard --frame    # one styled frame, for logs or a wall display
+dezhanctl put report --file ./q3-close.tar --mode compliance --retain 86400
+dezhanctl stat report          # object metadata (HEAD)
+dezhanctl get report -o ./out  # fetch to a file
+dezhanctl ls --json            # machine-readable output on any query command
+dezhanctl del report           # refused while the object is retained
+dezhanctl admin scrub --admin-token "$DEZHAN_ADMIN_TOKEN"   # token-gated ops
+dezhanctl completion bash      # shell completion (bash|zsh|fish|powershell)
+```
 
 ## What it proves
 
 Four things in the trusted core are written in SPARK and machine-checked by
-`gnatprove` — **325 verification conditions, 0 unproved**, on every commit. Not
+`gnatprove`: **325 verification conditions, 0 unproved**, on every commit. Not
 tested. Proved.
 
 | Verified component | Invariant it guarantees | How |
 |---|---|---|
 | Retention state machine | retention may be extended, never shortened; a retained object cannot be deleted before expiry | SPARK contracts, discharged by `gnatprove` |
-| Clock-integrity guard | a rewound or tampered system clock cannot expire a lock; the vault seals instead of releasing | proved monotonic trusted time |
-| Append-only audit chain | every operation is hash-chained; recorded history cannot be rewritten undetectably | proved append-only structure |
+| Clock-integrity guard | a rewound or tampered clock cannot expire a lock; the vault seals instead of releasing | proved monotonic trusted time |
+| Append-only audit chain | every operation is hash-chained; history cannot be rewritten undetectably | proved append-only structure |
 | Erasure coding | data survives drive loss and reconstructs exactly, or is quarantined, never returned wrong | proved reconstruction |
 
-The cryptography — SHA-256/512, ChaCha20, HMAC, Ed25519 — is implemented in-tree
-with no external runtime dependency, so the entire integrity path is auditable
-in one place. Design notes and current limits: [`docs/NOTES.md`](docs/NOTES.md).
+The cryptography (SHA-256/512, ChaCha20, HMAC, Ed25519) is implemented in-tree
+with no external runtime dependency, so the whole integrity path is auditable in
+one place. Design notes and current limits: [`docs/NOTES.md`](docs/NOTES.md).
 
 ## Speaks S3
 
@@ -118,76 +91,37 @@ and Object Lock / WORM with legal hold.
 ```sh
 ALIAS="aws --endpoint-url http://localhost:8080 --region us-east-1"
 $ALIAS s3 mb s3://backups
-$ALIAS s3 cp ./data.tar s3://backups/                 # any size; multipart handled
+$ALIAS s3 cp ./data.tar s3://backups/                 # any size, multipart handled
 $ALIAS s3api create-bucket --bucket vault --object-lock-enabled-for-bucket
 $ALIAS s3 cp important.bak s3://vault/
 $ALIAS s3 rm  s3://vault/important.bak                 # refused until retention expires
 ```
 
-Or the built-in CLI that ships in the image (this is the flow in the demo above):
-
-```sh
-dezhan_cli version                                  # dezhan_cli 1.3.0
-dezhan_cli health                                   # ok / sealed
-dezhan_cli put report data.tar compliance 86400     # store under a 1-day retention
-dezhan_cli get report                               # restores keep working
-dezhan_cli del report                               # refused until retention expires
-```
-
-The running server reports its own version at `GET /version` and as a
-`dezhan_build_info{version="..."}` metric on `/metrics`.
-
 Buckets are mutable (Standard) by default; enabling Object Lock makes a bucket
-Immutable/WORM. More examples — `restic`, `boto3`, Velero, the operator CR — are
-in [`examples/`](examples/).
+Immutable/WORM. A minimal `dezhan_cli` also ships in the image; more examples
+(`restic`, `boto3`, Velero, the operator CR) are in [`examples/`](examples/).
 
-## Live dashboard
+## Measured, not asserted
 
-`dezhanctl` is a small Go control CLI with a live TUI dashboard (Cobra +
-[Bubble Tea](https://github.com/charmbracelet/bubbletea)). It reads the vault's
-plain control plane (`/healthz`, `/version`, `/metrics`, `/v`), so it needs no
-AWS SDK and works against a local or air-gapped server.
+The proof is a hard gate, not a report: [`scripts/prove.sh`](scripts/prove.sh)
+runs `gnatprove` and CI **fails on a single unproved check**, so the invariants
+stay machine-proved on every commit.
 
-![dezhanctl dashboard](docs/assets/dashboard.png)
+dezhan trades write speed for durability. Every object is content-addressed,
+ChaCha20-encrypted per chunk, Reed-Solomon erasure-coded, and fsync'd, so writes
+are deliberately slow (about 1.2 MB/s at 4 MiB, small objects fsync-bound near
+1 op/s) while reads are faster (about 37 MB/s at 4 MiB). Per-chunk work runs in
+parallel across cores, and objects of any size store and restore. Against Veeam,
+the closest immutable-backup product, the difference is how immutability is
+guaranteed: dezhan proves the delete-before-expiry path unreachable in its core,
+where Veeam enforces it in the storage layer. Full tables and the capability
+comparison: [`bench/results/COMPARISON.md`](bench/results/COMPARISON.md).
 
-```sh
-cd ctl && go build -o dezhanctl .
-export DEZHAN_ENDPOINT=http://127.0.0.1:8080
-
-dezhanctl dashboard            # live TUI: health, seal state, objects, audit, scrub
-dezhanctl dashboard --frame    # one styled frame (no TUI), for logs or a wall display
-dezhanctl health               # scriptable checks
-dezhanctl ls
-dezhanctl put report --file ./q3-close.tar --mode compliance --retain 86400
-dezhanctl stat report          # object metadata (HEAD)
-dezhanctl get report -o ./out  # fetch to a file
-dezhanctl ls --json            # machine-readable output on any query command
-dezhanctl del report           # refused while the object is retained
-
-dezhanctl admin scrub          # operator control plane (token-gated)
-dezhanctl admin gc
-dezhanctl admin checkpoint --admin-token "$DEZHAN_ADMIN_TOKEN"
-```
-
-## Architecture
-
-A vault is a **single writer over durable storage**: a one-replica StatefulSet
-on a `ReadWriteOnce` volume. Do not scale it; the immutability and audit-chain
-guarantees assume one writer, and cross-node durability comes from the
-StorageClass beneath it (Ceph, a cloud disk, Longhorn). The pod runs non-root,
-read-only root filesystem, all capabilities dropped, with only `/data` writable.
-
-Three images are published to GHCR and share one code base:
-
-- **`dezhan`** — the vault server. For a plain install this is all you need.
-- **`dezhan-operator`** — reconciles a `DezhanVault` custom resource into a
-  StatefulSet, Service, PVC, and PodDisruptionBudget.
-- **`dezhan-csi`** — exposes a vault as Kubernetes PersistentVolumes, one bucket
-  per PVC, mounted with [mountpoint-s3](https://github.com/awslabs/mountpoint-s3).
+![dezhan measured S3 throughput](bench/dezhan-vs-others.svg)
 
 ## Quick start
 
-On-prem — pulls the image, runs it, prints generated credentials:
+On-prem (pulls the image, runs it, prints generated credentials):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/obsernetics/dezhan/main/install.sh | sh
@@ -211,50 +145,23 @@ spec:
   secretName: my-vault-secrets   # DEZHAN_VAULT_KEY, DEZHAN_SECRET, ...
 ```
 
-Reach the vault in-cluster at `http://my-vault.<namespace>.svc:8080`. Full CR
-spec, resilience notes, and the CSI StorageClass are under
-[Kubernetes](#kubernetes) below.
+Reach the vault in-cluster at `http://my-vault.<namespace>.svc:8080`.
 
-## Measured, not asserted
+## Architecture
 
-The proof is a hard gate, not a report. [`scripts/prove.sh`](scripts/prove.sh)
-runs `gnatprove` on the trusted core and the CI job **fails on a single unproved
-check**, so the mandatory invariants stay machine-proved on every commit.
-[`scripts/coverage.sh`](scripts/coverage.sh) holds trusted-core line coverage,
-and [`scripts/test.sh`](scripts/test.sh) runs the unit suite.
-
-dezhan is an immutable backup target: backup tools write to its S3 API, and the
-retention guarantee is enforced in the vault itself. Throughput is measured with
-[`bench/s3bench.py`](bench/s3bench.py) on one VM (4 vCPU). dezhan trades write
-speed for durability and integrity: every object is content-addressed,
-ChaCha20-encrypted per chunk, Reed-Solomon erasure-coded, and fsync'd, so writes
-are deliberately slow (about 1.2 MB/s at 4 MiB, and small-object writes are
-fsync-bound at roughly 1 op/s) while reads are faster (about 37 MB/s at 4 MiB).
-Objects store and restore correctly at any size, and per-chunk encrypt-and-encode
-runs in parallel across cores.
-
-Against Veeam, the closest immutable-backup product, the difference is how
-immutability is guaranteed: dezhan proves the delete-before-expiry path
-unreachable in its trusted core, where Veeam enforces it in the storage layer
-(the XFS immutable flag or S3 Object Lock). Full throughput tables and the
-capability comparison: [`bench/results/COMPARISON.md`](bench/results/COMPARISON.md).
-Re-run `bench/s3bench.py` then `bench/graph.py` to refresh.
-
-![dezhan measured S3 throughput](bench/dezhan-vs-others.svg)
-
-## Requirements
-
-- A Linux host with a container runtime, or **Kubernetes 1.24+** for the
-  operator and CSI driver.
-- Durable block storage for the vault's `/data` (a StorageClass that reattaches
-  the volume, for HA).
-- Nothing else at runtime: the vault has no external service dependency and runs
-  air-gapped by design.
+A vault is a **single writer over durable storage**: a one-replica StatefulSet
+on a `ReadWriteOnce` volume. Do not scale it; the immutability and audit-chain
+guarantees assume one writer, and cross-node durability comes from the
+StorageClass beneath it. The pod runs non-root, read-only root filesystem, all
+capabilities dropped, with only `/data` writable. Three images are published to
+GHCR from one code base: **`dezhan`** (the vault server, all you need for a plain
+install), **`dezhan-operator`** (reconciles a `DezhanVault` custom resource), and
+**`dezhan-csi`** (exposes a vault as PersistentVolumes, one bucket per PVC).
 
 ## Configuration
 
-`dezhan_server [port] [data-dir]`. Operations: `GET /healthz`, `GET /metrics`
-(Prometheus), `POST /admin/{seal,scrub,checkpoint}`, and a web UI at `/`.
+`dezhan_server [port] [data-dir]`. Endpoints: `GET /healthz`, `GET /metrics`
+(Prometheus), `POST /admin/{seal,scrub,checkpoint,gc}`, and a web UI at `/`.
 
 | Variable | Meaning | Default |
 |---|---|---|
@@ -265,53 +172,15 @@ Re-run `bench/s3bench.py` then `bench/graph.py` to refresh.
 | `DEZHAN_TOKENS` | API token / service-account lines `token accesskey` | `<root>/tokens` |
 | `DEZHAN_ADMIN_TOKEN` | token (`X-Dezhan-Admin-Token`) gating `/admin/*` | unset |
 | `DEZHAN_DELETE_QUORUM` / `DEZHAN_APPROVERS` | four-eyes deletes | `0` / unset |
-| `DEZHAN_APPROVAL_TTL` | seconds a staged delete approval stays valid | `3600` |
 | `DEZHAN_SCRUB_INTERVAL` | seconds between integrity scrubs | `300` |
-| `DEZHAN_CHECKPOINT_INTERVAL` | seconds between audit checkpoints (0 = off) | `0` |
-| `DEZHAN_GC_INTERVAL` | seconds between garbage-collection passes (0 = off) | `0` |
+| `DEZHAN_CHECKPOINT_INTERVAL` / `DEZHAN_GC_INTERVAL` | seconds between checkpoints / GC (0 = off) | `0` |
 
-Each credential has a default access level (`rw`, `ro`, or `none`) plus optional
-per-bucket overrides, e.g. `auditor s3cret none logs:ro`. Service accounts use
-API tokens (`Authorization: Bearer <token>`). With `DEZHAN_DELETE_QUORUM` set, a
-delete needs approver co-signatures, synchronously or staged. Run
-`sh scripts/smoke.sh` for a `boto3` conformance check.
-
-## Kubernetes
-
-The operator reconciles a `DezhanVault` into a single-replica StatefulSet, a
-Service, a PVC, and a PodDisruptionBudget, and reports readiness on the resource
-status. Reconciles are level-based and idempotent; owned objects are recreated
-if deleted; the operator runs two replicas behind leader election.
-
-| Field | Default | Meaning |
-|---|---|---|
-| `image` | `ghcr.io/obsernetics/dezhan:latest` | server image |
-| `port` | `8080` | listen port |
-| `storage` | `50Gi` | persistent volume size (raise it to expand online) |
-| `storageClassName` | cluster default | PVC storage class |
-| `requireAuth` | `true` | reject unsigned requests |
-| `deleteQuorum` | `0` | approver co-signatures required to delete |
-| `scrubIntervalSeconds` | `0` (server default 300) | verify-and-self-heal interval |
-| `secretName` | none | Secret whose keys become server env vars |
-| `serviceType` | `ClusterIP` | `ClusterIP` / `NodePort` / `LoadBalancer` |
-| `resources` | none | container requests/limits |
-
-Put every secret (`DEZHAN_VAULT_KEY`, `DEZHAN_SECRET`, `DEZHAN_ADMIN_TOKEN`,
-`DEZHAN_APPROVERS`) in the referenced Secret; nothing sensitive belongs in the
-CR. A ready-to-edit sample is in
-[`operator/config/samples`](operator/config/samples).
-
-**As a volume (CSI).** The `dezhan` CSI driver turns a vault into a StorageClass:
-each PVC becomes a bucket, mounted on the node via mountpoint-s3. Best for
-write-once / append / archival workloads (it matches WORM); not for random-write
-volumes such as databases. Edit the endpoint and credentials, then
-`kubectl apply -f deploy/csi/`. Volume snapshots server-side-copy a bucket into
-an immutable snapshot bucket.
-
-**Observability.** `/metrics` is Prometheus format; the operator annotates each
-vault Service for scraping. Apply the ServiceMonitor, Grafana dashboard, alerts,
-and an OTel Collector bridge with
-`kubectl apply -f operator/config/observability/`.
+Each credential has a default access level (`rw`, `ro`, `none`) plus optional
+per-bucket overrides. With `DEZHAN_DELETE_QUORUM` set, a delete needs approver
+co-signatures. Run `sh scripts/smoke.sh` for a `boto3` conformance check. The
+operator reconciles a `DezhanVault` into a StatefulSet, Service, PVC, and
+PodDisruptionBudget; a ready-to-edit sample and the CSI StorageClass are under
+[`operator/config/samples`](operator/config/samples) and [`deploy/csi/`](deploy/csi/).
 
 ## Development
 
@@ -322,49 +191,34 @@ see [`CLAUDE.md`](CLAUDE.md) and [`Makefile`](Makefile).
 gprbuild -P dezhan.gpr           # build server, CLI, verifier
 sh scripts/test.sh               # unit tests
 sh scripts/prove.sh              # SPARK proof gate (hard)
-sh scripts/coverage.sh           # trusted-core line coverage
 ( cd operator && go build ./... && go test ./... )
 ( cd csi && go build ./... && go test ./... )
-( cd ctl && go build ./... && go vet ./... )   # dezhanctl dashboard CLI
+( cd ctl && go build ./... && go vet ./... && go test ./... )   # dezhanctl
 ```
 
 The demo GIF is rendered by [charmbracelet/vhs](https://github.com/charmbracelet/vhs)
-from [`docs/assets/demo.tape`](docs/assets/demo.tape) and
-[`docs/assets/demo.sh`](docs/assets/demo.sh), whose output is taken verbatim
-from a real run of the built binaries.
+from [`docs/assets/demo.tape`](docs/assets/demo.tape); its output reproduces a
+real run of the built binaries. The landing page at
+<https://obsernetics.github.io/dezhan/> is generated from this repo's own sources
+so it cannot drift: [`scripts/gen-site.py`](scripts/gen-site.py) injects the live
+throughput, proof count, and release version into the template at deploy time.
 
-The landing page at <https://obsernetics.github.io/dezhan/> is generated from
-this repo's own sources so it cannot drift. [`deploy/site/index.html`](deploy/site/index.html)
-is the hand-designed template; [`scripts/gen-site.py`](scripts/gen-site.py)
-(Python 3 standard library, no dependencies) injects the live values into its
-marked `data-metric` spans at deploy time: throughput from
-[`bench/results/`](bench/results/), the SPARK proof-check count from this
-README's badge, and the release version from the latest git tag. Edit the source,
-not the page. Preview locally with `python3 scripts/gen-site.py --output /tmp/index.html`;
-the deploy runs from [`.github/workflows/helm-release.yml`](.github/workflows/helm-release.yml).
+## Status
 
-## Honest status
-
-Provable immutability is the point, and the retention invariant is proved today
-(325 SPARK checks, 0 unproved, re-checked on every commit). Shipping now, on the
-current release: the S3 data plane (buckets, versioning, multipart, copy, batch
-delete, SigV4), transparent large-object storage at any size with parallel
-per-chunk encrypt-and-erasure-code, background scrub and self-heal, a signed
-audit chain and independent verifier, the Kubernetes operator and CSI driver,
-and the `dezhanctl` dashboard. Throughput is measured, not asserted (see
-[Measured](#measured-not-asserted)); dezhan is deliberately slower than a plain
-object store on writes.
-
-It is still early software: a `v1alpha1` operator API, no public production
-adopters yet, and an MVP scope — tape, database movers, and OIDC/LDAP are out
-until promoted from the spec. [`docs/NOTES.md`](docs/NOTES.md) records what is
-deliberately deferred; nothing in this README describes behavior that is not in
-the tree.
+Provable immutability is the point, and the retention invariant is proved today.
+Shipping now: the S3 data plane (buckets, versioning, multipart, copy, batch
+delete, SigV4), large-object storage at any size with parallel per-chunk
+encrypt-and-erasure-code, background scrub and self-heal, a signed audit chain
+and independent verifier, the Kubernetes operator and CSI driver, and the
+`dezhanctl` dashboard. It is still early software: a `v1alpha1` operator API and
+an MVP scope (tape, database movers, and OIDC/LDAP are deferred).
+[`docs/NOTES.md`](docs/NOTES.md) records what is deferred; nothing here describes
+behavior that is not in the tree.
 
 ## Contributing
 
 Contributions are welcome. Open an issue for substantial changes, and keep the
-proof gate green — a change that weakens an invariant has to update the SPARK
+proof gate green: a change that weakens an invariant has to update the SPARK
 contract and still pass `gnatprove`.
 
 ## License
