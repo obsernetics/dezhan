@@ -158,7 +158,10 @@ dezhanctl dashboard            # live TUI: health, seal state, objects, audit, s
 dezhanctl dashboard --frame    # one styled frame (no TUI), for logs or a wall display
 dezhanctl health               # scriptable checks
 dezhanctl ls
-dezhanctl put report data --mode compliance --retain 86400
+dezhanctl put report --file ./q3-close.tar --mode compliance --retain 86400
+dezhanctl stat report          # object metadata (HEAD)
+dezhanctl get report -o ./out  # fetch to a file
+dezhanctl ls --json            # machine-readable output on any query command
 dezhanctl del report           # refused while the object is retained
 
 dezhanctl admin scrub          # operator control plane (token-gated)

@@ -2,6 +2,8 @@
 package cmd
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 
@@ -14,6 +16,7 @@ var (
 	endpoint   string
 	timeout    time.Duration
 	adminToken string
+	jsonOut    bool
 )
 
 func defaultEndpoint() string {
@@ -43,4 +46,15 @@ func init() {
 	rootCmd.PersistentFlags().DurationVar(&timeout, "timeout", 10*time.Second, "request timeout")
 	rootCmd.PersistentFlags().StringVar(&adminToken, "admin-token", os.Getenv("DEZHAN_ADMIN_TOKEN"),
 		"admin token for /admin/* actions (or set DEZHAN_ADMIN_TOKEN)")
+	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
+}
+
+// printJSON writes v as indented JSON to stdout.
+func printJSON(v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
+	return nil
 }
