@@ -216,8 +216,8 @@ em { color: var(--text); font-style: normal; font-weight: 600; }
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 1.05fr 0.95fr;
-  gap: 3.5rem;
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: 3rem;
   align-items: center;
 }
 .hero-badge { margin-bottom: 1.5rem; }
