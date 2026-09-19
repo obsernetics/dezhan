@@ -56,7 +56,7 @@ with GNAT.OS_Lib;
 
 procedure Dezhan_Server is
 
-   Version_Number : constant String := "1.1.0";
+   Version_Number : constant String := "1.3.0";
    Version        : constant String := "dezhan " & Version_Number;
    CRLF    : constant String := ASCII.CR & ASCII.LF;
 

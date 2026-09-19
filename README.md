@@ -127,7 +127,7 @@ $ALIAS s3 rm  s3://vault/important.bak                 # refused until retention
 Or the built-in CLI that ships in the image (this is the flow in the demo above):
 
 ```sh
-dezhan_cli version                                  # dezhan_cli 1.1.0
+dezhan_cli version                                  # dezhan_cli 1.3.0
 dezhan_cli health                                   # ok / sealed
 dezhan_cli put report data.tar compliance 86400     # store under a 1-day retention
 dezhan_cli get report                               # restores keep working

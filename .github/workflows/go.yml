@@ -1,0 +1,44 @@
+name: go
+
+# Build, vet, and test the dezhanctl CLI (the `ctl` Go module) on every change
+# to it. Only `ctl` is built here: the operator and csi modules require a newer
+# Go toolchain and have their own workflows. Path filters keep this job off
+# unrelated changes.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ctl/**'
+      - '.github/workflows/go.yml'
+  pull_request:
+    paths:
+      - 'ctl/**'
+      - '.github/workflows/go.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ctl:
+    name: build / vet / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ctl/go.mod
+          cache-dependency-path: ctl/go.sum
+
+      - name: Build
+        working-directory: ctl
+        run: go build ./...
+
+      - name: Vet
+        working-directory: ctl
+        run: go vet ./...
+
+      - name: Test
+        working-directory: ctl
+        run: go test ./...
