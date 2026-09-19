@@ -21,8 +21,12 @@ permissions:
 # different branches and tags independent, so tag/release builds never
 # cancel each other.
 concurrency:
-  group: image-${{ github.ref }}
-  cancel-in-progress: true
+  # Keyed on the version being built (a release call) or the ref (a push), so a
+  # release image build never shares a group with the push-triggered `latest`
+  # build and cannot be cancelled by it. Releases publish artifacts, so never
+  # cancel them.
+  group: image-${{ inputs.version || github.ref }}
+  cancel-in-progress: ${{ inputs.version == '' }}
 
 jobs:
   build:
