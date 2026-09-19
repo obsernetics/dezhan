@@ -130,7 +130,7 @@
                     <h3>Provable, not configurable</h3>
                     <p>
                         The retention rule is a SPARK state machine, and <code>gnatprove</code>
-                        discharges every path on every commit: 325 checks, 0 unproved. "Immutable" is
+                        discharges every path on every commit: <span data-metric="proof_checks">325</span> checks, <span data-metric="proof_unproved">0</span> unproved. "Immutable" is
                         a property of the build, not a promise in a datasheet.
                     </p>
                 </article>
@@ -235,8 +235,8 @@
                         The proof gate (<code>scripts/prove.sh</code>) fails the build on any unproved
                         check. Throughput is measured on one VM with the same harness. dezhan trades
                         write speed for durability and integrity: writes are deliberately slow (about
-                        1.2 MB/s at 4 MiB, small objects fsync-bound near 1 op/s) while reads are faster
-                        (about 37 MB/s at 4 MiB). Unlike Veeam, which enforces immutability in the
+                        <span data-metric="put_mbps_4mib">1.2</span> MB/s at 4 MiB, small objects fsync-bound near <span data-metric="put_ops_1kib">1</span> op/s) while reads are faster
+                        (about <span data-metric="get_mbps_4mib">37</span> MB/s at 4 MiB). Unlike Veeam, which enforces immutability in the
                         storage layer, dezhan proves the delete-before-expiry path unreachable in its
                         trusted core. Per-chunk encrypt, hash and erasure-code work runs across the CPUs,
                         and objects of any size store and restore.
@@ -346,7 +346,7 @@ spec:
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; <span id="year">2026</span> dezhan &middot; Licensed under Apache 2.0</p>
+                <p>&copy; <span id="year">2026</span> dezhan &middot; <span data-metric="version">v1.3.0</span> &middot; Licensed under Apache 2.0</p>
                 <p class="footer-tagline">Write once. Delete never - until it expires.</p>
             </div>
         </div>

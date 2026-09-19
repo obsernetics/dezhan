@@ -11,6 +11,11 @@ on:
       - "deploy/charts/**"
       - "deploy/site/**"
       - "docs/assets/demo.gif"
+      # The page content is generated from these sources, so a change to any of
+      # them must republish the site (scripts/gen-site.py injects their values).
+      - "bench/results/**"
+      - "README.md"
+      - "scripts/gen-site.py"
       - ".github/workflows/helm-release.yml"
   # A release changes the version the site tells people to install.
   release:
@@ -37,7 +42,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      # Full history + tags: the generator reads the latest git tag as the
+      # authoritative release version to stamp into the page.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: azure/setup-helm@v5
         with:
@@ -50,19 +59,25 @@ jobs:
           # 1) Helm chart repository at the site root (keeps the repo add URL).
           helm package deploy/charts/dezhan -d public
           helm repo index public --url "$BASE"
-          # 2) Landing page + its assets (css/js/icon), then the demo GIF and
-          #    the dashboard screenshot.
+          # 2) Landing page assets (css/js/icon), then the demo GIF and the
+          #    dashboard screenshot.
           cp -r deploy/site/. public/
           cp docs/assets/demo.gif public/assets/demo.gif
           cp docs/assets/dashboard.png public/assets/dashboard.png
-          # 3) Cache-bust asset URLs with the commit sha so an update is never
-          #    masked by a browser holding the previous copy at the same URL.
-          REV="${GITHUB_SHA::7}"
+          # 3) Generate index.html from the repo's own sources so the published
+          #    page can never drift: throughput from bench/results, the proof
+          #    count from the README, the version from the latest git tag. The
+          #    generator also cache-busts css/js with the commit sha.
+          REV="${GITHUB_SHA::12}"
+          python3 scripts/gen-site.py \
+            --template deploy/site/index.html \
+            --cache-bust "$REV" \
+            --output public/index.html
+          # 4) Cache-bust the image assets too, so an updated GIF or screenshot
+          #    is never masked by a browser holding the old copy at the same URL.
           sed -i \
             -e "s#assets/demo.gif#assets/demo.gif?v=$REV#g" \
             -e "s#assets/dashboard.png#assets/dashboard.png?v=$REV#g" \
-            -e "s#\(assets/css/main.css\)?v=[0-9A-Za-z]*#\1?v=$REV#g" \
-            -e "s#\(assets/js/main.js\)?v=[0-9A-Za-z]*#\1?v=$REV#g" \
             public/index.html
 
       - uses: actions/configure-pages@v6

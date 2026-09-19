@@ -330,6 +330,16 @@ from [`docs/assets/demo.tape`](docs/assets/demo.tape) and
 [`docs/assets/demo.sh`](docs/assets/demo.sh), whose output is taken verbatim
 from a real run of the built binaries.
 
+The landing page at <https://obsernetics.github.io/dezhan/> is generated from
+this repo's own sources so it cannot drift. [`deploy/site/index.html`](deploy/site/index.html)
+is the hand-designed template; [`scripts/gen-site.py`](scripts/gen-site.py)
+(Python 3 standard library, no dependencies) injects the live values into its
+marked `data-metric` spans at deploy time: throughput from
+[`bench/results/`](bench/results/), the SPARK proof-check count from this
+README's badge, and the release version from the latest git tag. Edit the source,
+not the page. Preview locally with `python3 scripts/gen-site.py --output /tmp/index.html`;
+the deploy runs from [`.github/workflows/helm-release.yml`](.github/workflows/helm-release.yml).
+
 ## Honest status
 
 Provable immutability is the point, and the retention invariant is proved today
