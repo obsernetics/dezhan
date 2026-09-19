@@ -13,6 +13,9 @@ gnatprove/
 operator/bin/
 operator/cover.out
 
+# Go dezhanctl build artifact
+ctl/dezhanctl
+
 # Python bytecode
 __pycache__/
 *.py[cod]

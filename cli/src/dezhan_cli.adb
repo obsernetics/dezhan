@@ -31,7 +31,7 @@ procedure Dezhan_Cli is
    --  Product version, printed by `dezhan_cli version` / `--version` / `-v`.
    --  On a release build scripts/stamp-version.sh overwrites this literal with
    --  the release tag, so a released binary always reports its own version.
-   Version : constant String := "1.1.0";
+   Version : constant String := "1.3.0";
 
    Usage : constant String :=
      "usage: dezhan_cli <command>" & LF

@@ -127,7 +127,7 @@ $ALIAS s3 rm  s3://vault/important.bak                 # refused until retention
 Or the built-in CLI that ships in the image (this is the flow in the demo above):
 
 ```sh
-dezhan_cli version                                  # dezhan_cli 1.1.0
+dezhan_cli version                                  # dezhan_cli 1.3.0
 dezhan_cli health                                   # ok / sealed
 dezhan_cli put report data.tar compliance 86400     # store under a 1-day retention
 dezhan_cli get report                               # restores keep working
@@ -140,6 +140,31 @@ The running server reports its own version at `GET /version` and as a
 Buckets are mutable (Standard) by default; enabling Object Lock makes a bucket
 Immutable/WORM. More examples — `restic`, `boto3`, Velero, the operator CR — are
 in [`examples/`](examples/).
+
+## Live dashboard
+
+`dezhanctl` is a small Go control CLI with a live TUI dashboard (Cobra +
+[Bubble Tea](https://github.com/charmbracelet/bubbletea)). It reads the vault's
+plain control plane (`/healthz`, `/version`, `/metrics`, `/v`), so it needs no
+AWS SDK and works against a local or air-gapped server.
+
+![dezhanctl dashboard](docs/assets/dashboard.png)
+
+```sh
+cd ctl && go build -o dezhanctl .
+export DEZHAN_ENDPOINT=http://127.0.0.1:8080
+
+dezhanctl dashboard            # live TUI: health, seal state, objects, audit, scrub
+dezhanctl dashboard --frame    # one styled frame (no TUI), for logs or a wall display
+dezhanctl health               # scriptable checks
+dezhanctl ls
+dezhanctl put report data --mode compliance --retain 86400
+dezhanctl del report           # refused while the object is retained
+
+dezhanctl admin scrub          # operator control plane (token-gated)
+dezhanctl admin gc
+dezhanctl admin checkpoint --admin-token "$DEZHAN_ADMIN_TOKEN"
+```
 
 ## Architecture
 
@@ -297,6 +322,7 @@ sh scripts/prove.sh              # SPARK proof gate (hard)
 sh scripts/coverage.sh           # trusted-core line coverage
 ( cd operator && go build ./... && go test ./... )
 ( cd csi && go build ./... && go test ./... )
+( cd ctl && go build ./... && go vet ./... )   # dezhanctl dashboard CLI
 ```
 
 The demo GIF is rendered by [charmbracelet/vhs](https://github.com/charmbracelet/vhs)
@@ -306,10 +332,19 @@ from a real run of the built binaries.
 
 ## Honest status
 
-Provable immutability is the point, and the retention invariant is proved today.
-It is early software: a `v1alpha1` operator API, no public production adopters
-yet, and an MVP scope — tape, database movers, and OIDC/LDAP are out until
-promoted from the spec. [`docs/NOTES.md`](docs/NOTES.md) records what is
+Provable immutability is the point, and the retention invariant is proved today
+(325 SPARK checks, 0 unproved, re-checked on every commit). Shipping now, on the
+current release: the S3 data plane (buckets, versioning, multipart, copy, batch
+delete, SigV4), transparent large-object storage at any size with parallel
+per-chunk encrypt-and-erasure-code, background scrub and self-heal, a signed
+audit chain and independent verifier, the Kubernetes operator and CSI driver,
+and the `dezhanctl` dashboard. Throughput is measured, not asserted (see
+[Measured](#measured-not-asserted)); dezhan is deliberately slower than a plain
+object store on writes.
+
+It is still early software: a `v1alpha1` operator API, no public production
+adopters yet, and an MVP scope — tape, database movers, and OIDC/LDAP are out
+until promoted from the spec. [`docs/NOTES.md`](docs/NOTES.md) records what is
 deliberately deferred; nothing in this README describes behavior that is not in
 the tree.
 
