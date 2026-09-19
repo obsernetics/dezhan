@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   trivy:
     name: Trivy scan
@@ -27,6 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Cache Trivy vulnerability DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: |
+            trivy-db-
+
       - name: Run Trivy (filesystem)
         uses: aquasecurity/trivy-action@master
         with:
@@ -35,6 +47,7 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH,MEDIUM
+          cache-dir: ~/.cache/trivy
 
       - name: Upload results to the Security tab
         uses: github/codeql-action/upload-sarif@v4
