@@ -7,6 +7,13 @@ on:
   pull_request:
     paths: [ "operator/**", ".github/workflows/operator.yml" ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: operator-${{ github.ref }}
+  cancel-in-progress: true
+
 # Build, vet, and run the controller integration test against a real
 # kube-apiserver + etcd via envtest. The test asserts the controller reconciles
 # a DezhanVault into a Service, StatefulSet, and PVC, and does not churn on a
