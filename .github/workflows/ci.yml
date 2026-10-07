@@ -34,7 +34,7 @@ jobs:
       # of re-downloading the toolchain every run. Bump the "v1" suffix to force
       # a rebuild of the cache.
       - name: Cache Alire toolchain and GNATprove
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.local/share/alire
