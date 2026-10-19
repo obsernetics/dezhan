@@ -25,9 +25,9 @@ require (
 	github.com/aws/smithy-go v1.28.1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
 )
