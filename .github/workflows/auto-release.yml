@@ -132,3 +132,16 @@ jobs:
     with:
       version: ${{ needs.decide.outputs.version }}
     secrets: inherit
+
+  # Republish the landing page so its version/throughput reflect the new tag. A
+  # GITHUB_TOKEN release does not fire the release event, so the deploy is
+  # chained here instead; it runs after release.yml has created the tag.
+  pages:
+    needs: [ decide, release ]
+    if: needs.decide.outputs.release == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/helm-release.yml
+    secrets: inherit
