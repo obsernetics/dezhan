@@ -17,9 +17,12 @@ on:
       - "README.md"
       - "scripts/gen-site.py"
       - ".github/workflows/helm-release.yml"
-  # A release changes the version the site tells people to install.
+  # A release changes the version the site tells people to install. The
+  # published event does not fire for a GITHUB_TOKEN release, so auto-release
+  # also calls this workflow directly (workflow_call below) after it tags.
   release:
     types: [ published ]
+  workflow_call:
   # Weekly, so a source that changed without matching a path filter - or a
   # deploy that failed and was forgotten - is corrected within seven days.
   schedule:
